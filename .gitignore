@@ -31,3 +31,8 @@ btsnoop*.log
 **/firmware/**
 **/decompiled/**
 vendor/
+
+# --- Signing (local only, NEVER commit) ---
+*.jks
+*.keystore
+keystore.properties
