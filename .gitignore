@@ -1,0 +1,33 @@
+# --- Build outputs ---
+*.iml
+.gradle/
+build/
+android/build/
+android/app/build/
+android/.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# --- IDE ---
+.idea/
+.DS_Store
+*.swp
+
+# --- NEVER commit third-party / vendor binaries (copyright) ---
+# This project documents an interoperable protocol; it must not redistribute any
+# Garmin / Yamaha code or assets.
+*.ipa
+*.so
+*.update
+*.apkm
+*.xapk
+btsnoop*.log
+**/firmware/**
+**/decompiled/**
+vendor/
