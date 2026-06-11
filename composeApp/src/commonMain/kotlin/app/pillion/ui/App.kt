@@ -1,10 +1,12 @@
 package app.pillion.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +24,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -180,27 +183,53 @@ private fun SettingsScreen(
     onMaxFps: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
+    val uriHandler = LocalUriHandler.current
     Column(
         modifier = Modifier.fillMaxSize()
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             IconButton(onClick = onBack) {
                 Text("←", fontSize = 24.sp, color = MaterialTheme.colorScheme.onSurface)
             }
             Spacer(Modifier.width(4.dp))
-            Text(
-                "Settings",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
+            Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.height(20.dp))
-        SettingsCard(quality, onQuality, maxFps, onMaxFps)
+
+        SectionHeader("Mirroring")
+        SettingsGroup {
+            SettingSlider("Image quality", "$quality", quality.toFloat(), 10f, 80f) { onQuality(it.roundToInt()) }
+            GroupDivider()
+            SettingSlider("Max frame rate", "$maxFps fps", maxFps.toFloat(), 5f, 15f) { onMaxFps(it.roundToInt()) }
+        }
+        Text(
+            "Higher quality is sharper but lowers the frame rate your phone can push " +
+                "(≈14–15 fps at 40% on a fast phone). The cap limits frames to save battery and heat.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 6.dp, top = 8.dp, end = 6.dp),
+        )
+
         Spacer(Modifier.height(24.dp))
-        AboutSection()
+        SectionHeader("About")
+        SettingsGroup {
+            AppRow()
+            GroupDivider()
+            LinkRow("Source code") { uriHandler.openUri(REPO_URL) }
+            GroupDivider()
+            LinkRow("Report an issue") { uriHandler.openUri("$REPO_URL/issues") }
+            GroupDivider()
+            LinkRow("Changelog") { uriHandler.openUri("$REPO_URL/blob/main/CHANGELOG.md") }
+        }
+
+        Spacer(Modifier.height(28.dp))
+        MadeByCredit { uriHandler.openUri("https://github.com/alexandrevega") }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -393,38 +422,34 @@ private fun StepRow(number: Int, text: String) {
 }
 
 @Composable
-private fun SettingsCard(
-    quality: Int,
-    onQuality: (Int) -> Unit,
-    maxFps: Int,
-    onMaxFps: (Int) -> Unit,
-) {
+private fun SectionHeader(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        letterSpacing = 0.8.sp,
+        modifier = Modifier.padding(start = 6.dp, top = 8.dp, bottom = 8.dp),
+    )
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
-            Text(
-                "Battery & quality",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(4.dp))
-            SettingSlider("Image quality", "$quality", quality.toFloat(), 10f, 80f) {
-                onQuality(it.roundToInt())
-            }
-            SettingSlider("Max frame rate", "$maxFps fps", maxFps.toFloat(), 5f, 15f) {
-                onMaxFps(it.roundToInt())
-            }
-            Text(
-                "Higher quality is sharper but lowers the frame rate your phone can push " +
-                    "(≈14–15 fps at 40% on a fast phone). The cap limits frames to save battery and heat.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), content = content)
     }
+}
+
+@Composable
+private fun GroupDivider() {
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+        modifier = Modifier.padding(vertical = 2.dp),
+    )
 }
 
 @Composable
@@ -450,28 +475,62 @@ private fun SettingSlider(
 }
 
 @Composable
-private fun AboutSection() {
-    Column(Modifier.fillMaxWidth()) {
+private fun AppRow() {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "P",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        }
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text("Pillion", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "Version ${AppInfo.VERSION}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LinkRow(title: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Text("↗", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun MadeByCredit(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Made with ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("♥", style = MaterialTheme.typography.bodySmall, color = Color(0xFFFF5C8A))
+        Text(" by ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
-            "About",
-            style = MaterialTheme.typography.titleMedium,
+            "@alexandrevega",
+            style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Version ${AppInfo.VERSION}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Pillion mirrors your phone screen to a Garmin-powered motorcycle dash over Bluetooth. " +
-                "It's experimental and open source — not affiliated with, or endorsed by, Yamaha or Garmin.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(4.dp))
-        SourceLink(centered = false)
     }
 }
 
