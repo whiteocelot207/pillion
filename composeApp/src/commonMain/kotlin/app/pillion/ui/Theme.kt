@@ -9,6 +9,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import app.pillion.core.ThemeMode
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF34D8C8),
@@ -40,10 +41,15 @@ private val LightColors = lightColorScheme(
     outline = Color(0xFFD3D8DE),
 )
 
-/** Applies the Pillion color scheme (following the system light/dark setting) and a base surface. */
+/** Applies the Pillion color scheme for the chosen [ThemeMode] and a base surface. */
 @Composable
-internal fun PillionTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors) {
+internal fun PillionTheme(mode: ThemeMode, content: @Composable () -> Unit) {
+    val dark = when (mode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+    MaterialTheme(colorScheme = if (dark) DarkColors else LightColors) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, content = content)
     }
 }

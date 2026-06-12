@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import app.pillion.android.AndroidMirrorController
+import app.pillion.android.AndroidSettingsStore
 import app.pillion.android.CaptureService
 import app.pillion.android.GitHubUpdateChecker
 import app.pillion.core.AppInfo
@@ -50,7 +51,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val controller = AndroidMirrorController(onStart = ::startMirroring, onStop = ::stopMirroring)
         val updateChecker = GitHubUpdateChecker(AppInfo.REPO)
-        setContent { App(controller, updateChecker) }
+        val settingsStore = AndroidSettingsStore(applicationContext)
+        setContent { App(controller, updateChecker, settingsStore) }
     }
 
     private fun startMirroring(settings: MirrorSettings) {

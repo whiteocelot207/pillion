@@ -23,10 +23,14 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,18 +44,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.pillion.core.AppInfo
+import app.pillion.core.ThemeMode
 import app.pillion.core.UpdateInfo
 import app.pillion.resources.Res
 import app.pillion.resources.app_icon
 import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.painterResource
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsScreen(
     quality: Int,
     onQuality: (Int) -> Unit,
     maxFps: Int,
     onMaxFps: (Int) -> Unit,
+    themeMode: ThemeMode,
+    onThemeMode: (ThemeMode) -> Unit,
     update: UpdateInfo?,
     onBack: () -> Unit,
 ) {
@@ -116,6 +124,25 @@ internal fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
         }
 
+        SectionHeader("Appearance")
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            val options = listOf(
+                ThemeMode.SYSTEM to "System",
+                ThemeMode.LIGHT to "Light",
+                ThemeMode.DARK to "Dark",
+            )
+            options.forEachIndexed { index, (mode, label) ->
+                SegmentedButton(
+                    selected = themeMode == mode,
+                    onClick = { onThemeMode(mode) },
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                ) {
+                    Text(label)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
         SectionHeader("Mirroring")
         SettingsGroup {
             SettingSlider("Image quality", "$quality", quality.toFloat(), 10f, 80f) { onQuality(it.roundToInt()) }

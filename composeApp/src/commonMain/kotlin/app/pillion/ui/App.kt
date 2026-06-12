@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import app.pillion.core.AppInfo
 import app.pillion.core.MirrorController
 import app.pillion.core.MirrorSettings
+import app.pillion.core.SettingsStore
+import app.pillion.core.ThemeMode
 import app.pillion.core.UpdateChecker
 import app.pillion.core.UpdateInfo
 
@@ -24,8 +26,13 @@ const val REPO_URL = "https://github.com/alexandrevega/pillion"
  * [SettingsScreen] composables; this stays a thin orchestrator.
  */
 @Composable
-fun App(controller: MirrorController, updateChecker: UpdateChecker? = null) {
-    PillionTheme {
+fun App(
+    controller: MirrorController,
+    updateChecker: UpdateChecker? = null,
+    settingsStore: SettingsStore? = null,
+) {
+    var themeMode by remember { mutableStateOf(settingsStore?.themeMode() ?: ThemeMode.SYSTEM) }
+    PillionTheme(themeMode) {
         val state by controller.state.collectAsState()
         var quality by rememberSaveable { mutableStateOf(40) }
         var maxFps by rememberSaveable { mutableStateOf(15) }
@@ -44,6 +51,8 @@ fun App(controller: MirrorController, updateChecker: UpdateChecker? = null) {
                 onQuality = { quality = it },
                 maxFps = maxFps,
                 onMaxFps = { maxFps = it },
+                themeMode = themeMode,
+                onThemeMode = { themeMode = it; settingsStore?.setThemeMode(it) },
                 update = update,
                 onBack = { showSettings = false },
             )
