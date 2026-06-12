@@ -192,7 +192,7 @@ private fun ConnectGuide() {
         "Pair your phone with the bike in your Bluetooth settings (one time only).",
         "Mount the phone in landscape and turn on auto-rotate, so the map fills the dash.",
         "On the bike, switch the dash to Navigation mode.",
-        "Tap Start mirroring below, then allow screen capture.",
+        "Tap Start mirroring, then choose \"Entire screen\" and allow capture.",
         "Open Waze or Google Maps — it appears on your dash.",
     )
     Column(Modifier.fillMaxWidth()) {
