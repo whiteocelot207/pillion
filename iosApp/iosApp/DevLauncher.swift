@@ -47,6 +47,13 @@ struct DevLauncher: View {
                             }
                         }
                     }
+                    Section(header: Text("Whole-screen broadcast (→ dash)")) {
+                        Text("Mirrors the entire screen — start it, then open Waze/Maps. Streams to the bike if connected, else the dev emulator. The two options above only mirror Pillion's own screen.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        BroadcastPickerButton(preferredExtension: "app.pillion.dev.broadcast")
+                            .frame(height: 64)
+                    }
                 }
                 .navigationTitle("Pillion dev")
             }
