@@ -55,7 +55,7 @@ StreetCross app. Confirmed working by the community so far:
 | **MT-07 (2025)** | — | ✅ | ~14–15 | maintainer |
 | **R9 (2026)** | Galaxy S25 Ultra / Android 16 | ✅ | ~15, smooth | @rf7719. |
 | **MT-09 (2025)** | Galaxy S23 / Android 16 | ✅ | ~11–12 | @mobiusixi6246 |
-| **MT-09 SP (2026)** | Android | ✅ (OsmAnd) | — | @raccoon_builds |
+| **MT-09 SP (2026)** | Android | ✅ | — | @raccoon_builds |
 
 Very likely also works on other models with the same CCU platform (e.g. XSR900 GP, Tracer 9 GT+,
 Niken GT, TMAX, XMAX), since the protocol is shared — **more reports welcome** (open an issue or
