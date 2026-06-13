@@ -1,0 +1,53 @@
+name: iosApp
+options:
+  bundleIdPrefix: app.pillion
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    # Find + link the static Kotlin/Native framework produced by the Gradle build phase below.
+    FRAMEWORK_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/../composeApp/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+    OTHER_LDFLAGS:
+      - "$(inherited)"
+      - "-framework"
+      - "ComposeApp"
+targets:
+  iosApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.pillion.dev
+        INFOPLIST_FILE: iosApp/Info.plist
+        # Gradle's build phase writes outside DerivedData, so the sandbox must be off (Xcode 15+).
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    preBuildScripts:
+      - name: "Compile Kotlin/Native framework"
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home 2>/dev/null)}"
+          cd "$SRCROOT/.."
+          # Build the static framework for the right K/N target, then copy it where Xcode links it.
+          # (Explicit copy instead of embedAndSignAppleFrameworkForXcode, which silently skips when
+          # Xcode's env doesn't match its expectations.)
+          CONFIG_LC=$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')
+          CONFIG_CAP=$(echo "$CONFIG_LC" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            KN_TARGET="IosSimulatorArm64"; BIN_DIR="iosSimulatorArm64"
+          else
+            KN_TARGET="IosArm64"; BIN_DIR="iosArm64"
+          fi
+          ./gradlew ":composeApp:link${CONFIG_CAP}Framework${KN_TARGET}"
+          DEST="composeApp/build/xcode-frameworks/${CONFIGURATION}/${SDK_NAME}"
+          mkdir -p "$DEST"
+          rm -rf "$DEST/ComposeApp.framework"
+          cp -R "composeApp/build/bin/${BIN_DIR}/${CONFIG_LC}Framework/ComposeApp.framework" "$DEST/"

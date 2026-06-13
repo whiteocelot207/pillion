@@ -10,6 +10,7 @@ import app.pillion.ios.IosMirrorController
 import app.pillion.ios.IosSettingsStore
 import app.pillion.ios.NetworkByteChannel
 import app.pillion.ios.ReplayKitScreenSource
+import app.pillion.ios.TestPatternScreenSource
 import app.pillion.ui.App
 import platform.UIKit.UIViewController
 
@@ -45,6 +46,14 @@ fun MainViewControllerForBike(protocolString: String): UIViewController =
  */
 fun MainViewControllerForEmulator(host: String, port: Int = 7220): UIViewController =
     MainViewController(NetworkByteChannel(host, port), ReplayKitScreenSource())
+
+/**
+ * **Dev/DEBUG + Simulator.** Same emulator loopback as [MainViewControllerForEmulator], but with a
+ * synthetic [TestPatternScreenSource] instead of ReplayKit — proves the byte pipe on the Simulator,
+ * where in-app screen capture is unreliable. Use [MainViewControllerForEmulator] on a real device.
+ */
+fun MainViewControllerForEmulatorTestPattern(host: String, port: Int = 7220): UIViewController =
+    MainViewController(NetworkByteChannel(host, port), TestPatternScreenSource())
 
 /** UI-only preview entry (no transport) — boots the shared UI to validate it on iOS. */
 fun MainViewControllerPreview(): UIViewController =

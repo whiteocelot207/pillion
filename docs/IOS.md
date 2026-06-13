@@ -50,25 +50,49 @@ ship the bike path only.
 2. Launch a **Debug** build and choose the emulator transport, pointing it at that host:port.
 3. Watch the screen appear in the viewer at `http://<host>:8080`.
 
-## What's left (device work — needs a Mac + Xcode)
+## The `iosApp` Xcode project ✅
 
-1. **`iosApp` Xcode project:** a SwiftUI/UIKit shell that builds the Gradle framework
-   (`./gradlew :composeApp:embedAndSignAppleFrameworkForXcode`) and, under `#if DEBUG`, shows a
-   transport picker (emulator host field vs. bike) calling `MainViewControllerForEmulator` /
-   `MainViewControllerForBike`. Release hardcodes the bike. Plus signing (free personal team for
-   sideload; TestFlight later).
-2. **ReplayKit on a real device:** in-app `RPScreenRecorder` capture is unreliable on the Simulator,
-   so the first emulator bring-up can use a synthetic test-pattern `ScreenSource`; switch to
-   `ReplayKitScreenSource` on a device. (A Broadcast Upload Extension via an App Group is the path if
-   we later need whole-screen / out-of-app capture; in-app capture covers the app's own surface.)
-3. **`Info.plist` for the bike:** `UISupportedExternalAccessoryProtocols = [<dash EA protocol string>]`
-   + the External Accessory capability. Discover the protocol string on a connected bike via
-   `EAAccessory.protocolStrings`.
+`iosApp/` is a SwiftUI shell (generated from `iosApp/project.yml` via [XcodeGen]). A build phase
+compiles + copies the Kotlin/Native static framework, and the Swift entry view picks the transport:
 
-## Build
+- **`RootView`** — release goes straight to `MainViewControllerForBike`; debug shows `DevLauncher`.
+- **`DevLauncher`** (`#if DEBUG`) — a form to choose the **emulator** (host/port, with a "test
+  pattern" toggle) or the **bike**, then presents the Compose UI.
+
+It builds and links cleanly for the simulator and device. Generate + open:
+
+```bash
+brew install xcodegen          # once
+cd iosApp && xcodegen generate # writes iosApp.xcodeproj (gitignored)
+open iosApp.xcodeproj
+```
+
+### Running against the emulator (no bike)
+
+1. Start the emulator's TCP dash — locally (`python3 receiver.py`, `127.0.0.1:7220`) or on the Pi
+   (the `--bluetooth` service keeps TCP `7220` open too; use the Pi's IP from a device).
+2. In Xcode, set the **Signing team** (Signing & Capabilities → your Apple ID; re-auth in
+   Settings ▸ Accounts if needed), pick the **Simulator** or your **iPhone**, and Run.
+3. In `DevLauncher`: set host/port (`127.0.0.1` on the Simulator, the Pi's IP on a device), keep
+   **Test pattern** on for first light, tap **Connect to emulator**, then **Start** in the app
+   (allow the local-network prompt).
+4. The frame appears live in the viewer at `http://<host>:8080`. Flip **Test pattern** off on a real
+   device to stream the actual screen via `ReplayKitScreenSource`.
+
+## What's left
+
+1. **ReplayKit on a real device:** in-app `RPScreenRecorder` covers the app's own surface; a Broadcast
+   Upload Extension (via an App Group) is the path if we later need whole-screen / out-of-app capture.
+2. **Bike bring-up:** confirm the dash's EA protocol string on a connected bike via
+   `EAAccessory.protocolStrings`, set it in `Config.swift` + `UISupportedExternalAccessoryProtocols`
+   (Info.plist), and test `ExternalAccessoryByteChannel` on the bike.
+
+## Build (shared framework only)
 
 ```bash
 ./gradlew :composeApp:compileKotlinIosSimulatorArm64   # compile the shared iOS framework
 ```
 
 The first run downloads the Kotlin/Native toolchain (large). The Android build is unaffected.
+
+[XcodeGen]: https://github.com/yonaskolb/XcodeGen
