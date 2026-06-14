@@ -4,8 +4,12 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -33,7 +37,9 @@ class CaptureService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var engine: MirrorEngine? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var dashMode = false
+    private var dashEnabled = false
+    private var dashSwitch: SwitchableScreenSource? = null
+    private var screenReceiver: BroadcastReceiver? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -45,16 +51,18 @@ class CaptureService : Service() {
 
         val quality = intent?.getIntExtra(EXTRA_QUALITY, 40) ?: 40
         val maxFps = intent?.getIntExtra(EXTRA_MAX_FPS, 15) ?: 15
-        val dashComponent = intent?.getStringExtra(EXTRA_DASH_COMPONENT)
-
-        if (dashComponent != null) startDashSession(dashComponent, quality, maxFps)
-        else startMirrorSession(quality, maxFps)
+        dashEnabled = intent?.getBooleanExtra(EXTRA_DASH_ENABLED, false) ?: false
+        startSession(quality, maxFps)
         return START_NOT_STICKY
     }
 
-    /** Classic mirror: capture the phone screen via MediaProjection. */
-    private fun startMirrorSession(quality: Int, maxFps: Int) {
-        dashMode = false
+    /**
+     * One Bluetooth/NaviLite session. It always mirrors the phone via MediaProjection; when dash mode
+     * is enabled it also spawns the privileged helper and switches the engine's source to the dash
+     * (foreground app on a trusted display) whenever the phone is locked — **mirror while unlocked,
+     * dash while locked**. The helper only encodes while locked, so it costs no extra battery idle.
+     */
+    private fun startSession(quality: Int, maxFps: Int) {
         // Must be foreground (mediaProjection) before acquiring the projection (Android 10+).
         startForegroundTyped(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         val data = resultData
@@ -65,25 +73,61 @@ class CaptureService : Service() {
         val projection = mpm.getMediaProjection(resultCode, data) ?: run {
             fail("screen capture denied"); return
         }
-        // Create the virtual display NOW, while the projection token is fresh — deferring it behind
-        // the Bluetooth handshake makes Android 14/15 invalidate the projection (blank dash).
-        val screen = MediaProjectionScreenSource(this, projection, quality)
-        runCatching { screen.start() }
-        runEngine(screen, maxFps)
+        // Create the mirror display NOW, while the projection token is fresh.
+        val mirror = MediaProjectionScreenSource(this, projection, quality)
+        runCatching { mirror.start() }
+
+        val source: ScreenSource = if (dashEnabled) {
+            val switch = SwitchableScreenSource(mirror, DashStreamScreenSource())
+            dashSwitch = switch
+            // Spawn the helper once (needs the ADB connection); it serves over loopback afterwards.
+            scope.launch(Dispatchers.IO) { runCatching { spawnHelper(quality) } }
+            registerScreenReceiver()
+            switch
+        } else {
+            mirror
+        }
+        runEngine(source, maxFps)
     }
 
-    /**
-     * Dedicated dash: no MediaProjection — spawn the privileged [app.pillion.server.DashServer]
-     * helper (which renders the chosen app on a trusted display) and stream its frames over loopback
-     * TCP. Requires the in-app ADB bootstrap ([PillionAdb]) to already be connected.
-     */
-    private fun startDashSession(component: String, quality: Int, maxFps: Int) {
-        dashMode = true
-        startForegroundTyped(ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        // Spawn the helper detached so it outlives the ADB connection (Wi-Fi can drop on the bike).
-        scope.launch(Dispatchers.IO) { runCatching { spawnHelper(component, quality) } }
-        // The source retries the loopback connection until the helper is serving.
-        runEngine(DashStreamScreenSource(), maxFps)
+    /** Mirror while unlocked, dash while locked: promote the foreground app on lock, demote on unlock. */
+    private fun registerScreenReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: Intent) {
+                when (intent.action) {
+                    Intent.ACTION_SCREEN_OFF -> dashSwitch?.let { s -> foregroundComponent()?.let(s::promote) }
+                    Intent.ACTION_USER_PRESENT -> dashSwitch?.demote()
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+        screenReceiver = receiver
+    }
+
+    /** The foreground app's launcher component to promote at lock (excludes Pillion). */
+    private fun foregroundComponent(): String? {
+        val usm = getSystemService(UsageStatsManager::class.java) ?: return null
+        val now = System.currentTimeMillis()
+        val events = runCatching { usm.queryEvents(now - 60_000, now) }.getOrNull() ?: return null
+        val event = UsageEvents.Event()
+        var pkg: String? = null
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            @Suppress("DEPRECATION")
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND && event.packageName != packageName) {
+                pkg = event.packageName
+            }
+        }
+        return pkg?.let { packageManager.getLaunchIntentForPackage(it)?.component?.flattenToString() }
     }
 
     private fun runEngine(screen: ScreenSource, maxFps: Int) {
@@ -102,9 +146,10 @@ class CaptureService : Service() {
         mirror.start(scope)
     }
 
-    private fun spawnHelper(component: String, quality: Int) {
+    private fun spawnHelper(quality: Int) {
+        // No app argument: the helper creates the trusted display idle and waits for PROMOTE on lock.
         val cmd = "CLASSPATH=\$(pm path $packageName | grep base.apk | cut -d: -f2) " +
-            "nohup app_process / app.pillion.server.DashServer 480 240 160 $quality $component >/dev/null 2>&1 &"
+            "nohup app_process / app.pillion.server.DashServer 480 240 160 $quality >/dev/null 2>&1 &"
         val stream = PillionAdb.getInstance(this).openExecStream(cmd)
         stream.openInputStream().readBytes() // returns once the helper has backgrounded
         runCatching { stream.close() }
@@ -121,8 +166,9 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         engine?.stop()
+        screenReceiver?.let { runCatching { unregisterReceiver(it) } }
         // Detached thread: it must outlive scope.cancel() to tell the helper to release the display.
-        if (dashMode) Thread { killHelper() }.start()
+        if (dashEnabled) Thread { killHelper() }.start()
         scope.cancel()
         releaseWakeLock()
         _state.value = MirrorState.Idle
@@ -189,8 +235,8 @@ class CaptureService : Service() {
         const val ACTION_STOP = "app.pillion.action.STOP"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_MAX_FPS = "maxFps"
-        /** When set (a "pkg/activity" component), run in dedicated-dash mode instead of mirroring. */
-        const val EXTRA_DASH_COMPONENT = "dashComponent"
+        /** When true, the session switches to the dedicated dash display whenever the phone is locked. */
+        const val EXTRA_DASH_ENABLED = "dashEnabled"
 
         // Handed over by the Activity after the user grants screen capture.
         @Volatile var resultCode: Int = 0

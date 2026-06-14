@@ -50,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import app.pillion.core.DashSetup
 import app.pillion.core.DashStage
-import app.pillion.core.MirrorSettings
 import app.pillion.resources.Res
 import app.pillion.resources.dash_step_dialog
 import app.pillion.resources.dash_step_toggle
@@ -68,7 +67,6 @@ import org.jetbrains.compose.resources.painterResource
 @Composable
 internal fun DashOnboarding(
     dash: DashSetup,
-    settings: MirrorSettings,
     onOptOut: () -> Unit,
     onFinish: () -> Unit,
     onClose: () -> Unit,

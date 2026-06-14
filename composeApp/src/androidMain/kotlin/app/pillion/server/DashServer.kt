@@ -72,6 +72,11 @@ object DashServer {
     @Volatile private var latestJpeg: ByteArray? = null
     @Volatile private var latestSeq = 0L
 
+    // Battery: encode only while a foreground app is promoted (phone locked). Idle otherwise.
+    @Volatile private var capturing = false
+    @Volatile private var displayId = -1
+    @Volatile private var lastComponent: String? = null
+
     @JvmStatic
     fun main(args: Array<String>) {
         if (Looper.myLooper() == null) Looper.prepareMainLooper()
@@ -91,16 +96,12 @@ object DashServer {
             reader.setOnImageAvailableListener({ ir -> onImage(ir) }, handler)
 
             val display = createTrustedVirtualDisplay(context, "pillion-dash", width, height, dpi, reader.surface)
-            Log.i(TAG, "trusted display created id=${display.display.displayId}")
+            displayId = display.display.displayId
+            Log.i(TAG, "trusted display created id=$displayId")
 
-            if (launchComponent != null) {
-                val exit = exec(
-                    "am", "start", "--display", display.display.displayId.toString(),
-                    "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
-                    "-n", launchComponent,
-                )
-                Log.i(TAG, "launched $launchComponent on display ${display.display.displayId} (exit=$exit)")
-            }
+            // The display starts empty (idle, no encoding). The app sends PROMOTE on screen-off and
+            // DEMOTE on unlock over the socket. An optional arg promotes immediately (dev/testing).
+            if (launchComponent != null) promoteApp(launchComponent)
             startTcpServer()
             Log.i(TAG, "ready, serving frames on 127.0.0.1:$PORT")
         } catch (t: Throwable) {
@@ -110,10 +111,14 @@ object DashServer {
         Looper.loop()
     }
 
-    /** Encode the newest frame to JPEG (throttled) and keep it for the TCP server to push. */
+    /**
+     * Encode the newest frame to JPEG (throttled) while promoted. When idle ([capturing]=false) we
+     * drain frames without encoding, so an unlocked phone (mirroring instead) costs no extra battery.
+     */
     private fun onImage(reader: ImageReader) {
         val image = reader.acquireLatestImage() ?: return
         try {
+            if (!capturing) return
             val now = System.currentTimeMillis()
             if (now - lastEncodeMs < MIN_INTERVAL_MS) return
             lastEncodeMs = now
@@ -138,6 +143,8 @@ object DashServer {
     }
 
     private fun serveClient(client: Socket) {
+        // Reverse channel: the app sends "PROMOTE <component>" on screen-off and "DEMOTE" on unlock.
+        Thread { readCommands(client) }.apply { isDaemon = true; start() }
         try {
             client.tcpNoDelay = true
             val out = DataOutputStream(BufferedOutputStream(client.getOutputStream()))
@@ -159,6 +166,46 @@ object DashServer {
         } finally {
             runCatching { client.close() }
         }
+    }
+
+    private fun readCommands(client: Socket) {
+        try {
+            val input = client.getInputStream().bufferedReader()
+            while (true) {
+                val line = input.readLine()?.trim() ?: break
+                when {
+                    line.startsWith("PROMOTE ") -> promoteApp(line.removePrefix("PROMOTE ").trim())
+                    line == "DEMOTE" -> demoteApp()
+                }
+            }
+        } catch (_: Throwable) {
+            // socket closed; the writer loop handles teardown
+        }
+    }
+
+    /** Move the foreground app onto the dash display and start encoding (phone just locked). */
+    private fun promoteApp(component: String) {
+        if (displayId < 0 || component.isEmpty()) return
+        exec(
+            "am", "start", "--display", displayId.toString(),
+            "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", component,
+        )
+        lastComponent = component
+        capturing = true
+        Log.i(TAG, "promoted $component to display $displayId")
+    }
+
+    /** Move the app back to the phone and stop encoding (phone unlocked). */
+    private fun demoteApp() {
+        capturing = false
+        latestJpeg = null
+        lastComponent?.let {
+            exec(
+                "am", "start", "--display", "0",
+                "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", it,
+            )
+        }
+        Log.i(TAG, "demoted to phone")
     }
 
     private fun toJpeg(image: Image): ByteArray {

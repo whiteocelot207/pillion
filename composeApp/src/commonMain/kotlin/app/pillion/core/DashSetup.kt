@@ -34,10 +34,4 @@ interface DashSetup {
 
     /** Connect to the phone's own adbd (mDNS auto-discovery, reusing the stored pairing key). */
     fun connect()
-
-    /** Promote whatever app is in the foreground onto the dash display and stream it. */
-    fun startCast(settings: MirrorSettings)
-
-    /** Stop casting and release the dash display (returns to [DashStage.Connected]). */
-    fun stopCast()
 }

@@ -58,6 +58,21 @@ class DashStreamScreenSource : ScreenSource {
 
     override fun latestFrame(): ByteArray? = latest
 
+    /** Tell the helper to move the foreground app onto the dash display and start encoding. */
+    fun promote(component: String) = send("PROMOTE $component\n")
+
+    /** Tell the helper to move the app back to the phone and stop encoding. */
+    fun demote() = send("DEMOTE\n")
+
+    private fun send(line: String) {
+        val s = socket ?: return
+        synchronized(writeLock) {
+            runCatching { s.getOutputStream().apply { write(line.toByteArray()); flush() } }
+        }
+    }
+
+    private val writeLock = Any()
+
     override fun stop() {
         running = false
         runCatching { socket?.close() }

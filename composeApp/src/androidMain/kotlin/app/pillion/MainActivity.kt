@@ -26,6 +26,7 @@ import app.pillion.ui.App
 class MainActivity : ComponentActivity() {
 
     private var pendingSettings = MirrorSettings()
+    private val settingsStore by lazy { AndroidSettingsStore(applicationContext) }
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -37,6 +38,8 @@ class MainActivity : ComponentActivity() {
             val intent = Intent(this, CaptureService::class.java)
                 .putExtra(CaptureService.EXTRA_QUALITY, pendingSettings.quality)
                 .putExtra(CaptureService.EXTRA_MAX_FPS, pendingSettings.maxFps)
+                // When dash mode is on, the session switches to the dash display while locked.
+                .putExtra(CaptureService.EXTRA_DASH_ENABLED, settingsStore.dashEnabled())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
             else startService(intent)
         }
@@ -52,7 +55,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val controller = AndroidMirrorController(onStart = ::startMirroring, onStop = ::stopMirroring)
         val updateChecker = GitHubUpdateChecker(AppInfo.REPO)
-        val settingsStore = AndroidSettingsStore(applicationContext)
         val dashSetup = AndroidDashSetup(applicationContext)
         setContent { App(controller, updateChecker, settingsStore, dashSetup) }
     }

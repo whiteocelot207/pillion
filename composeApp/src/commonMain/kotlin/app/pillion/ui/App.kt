@@ -54,7 +54,6 @@ fun App(
         if (showDashOnboarding && dashSetup != null) {
             DashOnboarding(
                 dash = dashSetup,
-                settings = MirrorSettings(quality, maxFps),
                 onOptOut = {
                     dashEnabled = false; settingsStore?.setDashEnabled(false); showDashOnboarding = false
                 },
