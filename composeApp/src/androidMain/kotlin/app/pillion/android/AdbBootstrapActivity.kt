@@ -135,47 +135,32 @@ class AdbBootstrapActivity : ComponentActivity() {
                         if (target == null) { append("❌ No foreground app (grant Usage access)"); return@launch }
                         val component = packageManager.getLaunchIntentForPackage(target)?.component?.flattenToString()
                         if (component == null) { append("❌ $target has no launcher activity"); return@launch }
-                        append("Promoting $component to a trusted display…")
-                        runCatching {
-                            withContext(Dispatchers.IO) {
-                                val cmd = "CLASSPATH=\$(pm path app.pillion | grep base.apk | cut -d: -f2) " +
-                                    "app_process / app.pillion.server.DashServer 480 240 160 40 $component"
-                                PillionAdb.getInstance(applicationContext).openShellStream(cmd)
-                                    .openInputStream().bufferedReader().forEachLine { line ->
-                                        runOnUiThread { append("helper: $line") }
-                                    }
-                            }
-                        }.onFailure { append("❌ Helper failed: ${it.message}") }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("4. Launch dash helper (promote foreground app)") }
-
-            Button(
-                onClick = {
-                    scope.launch {
-                        append("Connecting to capture socket…")
+                        append("Promoting $component + reading frames…")
                         withContext(Dispatchers.IO) {
-                            val src = DashSocketScreenSource()
-                            src.start()
-                            var got = 0
-                            repeat(20) {
-                                Thread.sleep(300)
-                                val f = src.latestFrame()
-                                if (f != null) {
-                                    got++
-                                    if (got <= 3) runOnUiThread { append("frame: ${f.size} bytes") }
+                            runCatching {
+                                val cmd = "CLASSPATH=\$(pm path app.pillion | grep base.apk | cut -d: -f2) " +
+                                    "app_process / app.pillion.server.DashServer 480 240 160 40 $component 2>/dev/null"
+                                val stream = PillionAdb.getInstance(applicationContext).openExecStream(cmd)
+                                val src = DashStreamScreenSource(stream.openInputStream())
+                                src.start()
+                                var got = 0
+                                repeat(20) {
+                                    Thread.sleep(400)
+                                    src.latestFrame()?.let { f ->
+                                        got++
+                                        if (got <= 3) runOnUiThread { append("frame: ${f.size} bytes") }
+                                    }
                                 }
-                            }
-                            src.stop()
-                            runOnUiThread {
-                                append(if (got > 0) "✅ Received $got frame samples" else "❌ No frames (helper running?)")
-                            }
+                                src.stop(); stream.close()
+                                runOnUiThread {
+                                    append(if (got > 0) "✅ Received $got frames over exec stream" else "❌ No frames")
+                                }
+                            }.onFailure { runOnUiThread { append("❌ ${it.message}") } }
                         }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("5. Read capture stream (test)") }
+            ) { Text("4. Launch helper + read stream") }
 
             Spacer(Modifier.height(16.dp))
             Text(log, style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)

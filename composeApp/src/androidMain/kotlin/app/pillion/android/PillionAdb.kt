@@ -76,6 +76,12 @@ class PillionAdb private constructor(
      */
     fun openShellStream(command: String): AdbStream = openStream("shell:$command")
 
+    /**
+     * Open a raw `exec:` stream (no PTY, so binary isn't mangled) — used to spawn the
+     * [app.pillion.server.DashServer] helper and read its JPEG frame stream off stdout.
+     */
+    fun openExecStream(command: String): AdbStream = openStream("exec:$command")
+
     companion object {
         @Volatile private var instance: PillionAdb? = null
 

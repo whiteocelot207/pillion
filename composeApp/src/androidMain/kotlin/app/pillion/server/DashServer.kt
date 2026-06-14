@@ -9,14 +9,16 @@ import android.graphics.PixelFormat
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
-import android.net.LocalServerSocket
-import android.net.LocalSocket
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.util.Log
 import android.view.Surface
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import java.io.FileDescriptor
+import java.io.FileOutputStream
 
 /**
  * Privileged helper for the dedicated-dash feature, run as the **shell uid** via `app_process`
@@ -25,20 +27,20 @@ import java.io.DataOutputStream
  * it, capture it, and stream it back to the app, so the dash keeps rendering with the phone screen
  * off.
  *
- * Pipeline: trusted VirtualDisplay -> ImageReader -> JPEG -> [4-byte big-endian length][bytes]
- * frames over an **abstract** LocalServerSocket ([SOCKET_NAME]). The socket is in the abstract
- * namespace, so the app (a different uid) can connect by name, and it survives Wi-Fi dropping
- * because it never touches the network — the ADB connection is only used to *spawn* this process.
+ * Pipeline: trusted VirtualDisplay -> ImageReader -> JPEG -> `[4-byte big-endian length][bytes]`
+ * frames written to **stdout**. The app spawns us over the ADB `exec:` service and reads the frames
+ * straight off that stream. We deliberately do NOT use a separate local socket: SELinux forbids an
+ * untrusted_app from connecting to a shell-owned socket (`avc: denied { connectto } ... tcontext=
+ * shell`), whereas the ADB exec stream crosses domains cleanly (it's how scrcpy streams too).
  *
- * It is NOT an Android component: no Application/Activity context, so it gets a system context via
- * [android.app.ActivityThread] reflection and talks to the framework directly (the scrcpy approach).
+ * Status/diagnostics go to **logcat** (tag [TAG]); stdout carries only frame bytes.
  *
- * Launch (via the ADB shell):
+ * Launch (raw exec, no PTY mangling):
  *   CLASSPATH=<base.apk> app_process / app.pillion.server.DashServer <w> <h> <dpi> <quality> <component>
  */
 object DashServer {
 
-    const val SOCKET_NAME = "pillion_dash"
+    private const val TAG = "PillionDash"
 
     // Public flags exist on DisplayManager; the trusted/own-group/always-unlocked ones are @hide,
     // so use their raw bit values (verified against scrcpy + dumpsys on Android 16).
@@ -55,14 +57,15 @@ object DashServer {
         FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS or FLAG_TRUSTED or FLAG_OWN_DISPLAY_GROUP or
         FLAG_ALWAYS_UNLOCKED or FLAG_TOUCH_FEEDBACK_DISABLED
 
+    private const val MIN_INTERVAL_MS = 50L // cap capture/encode to ~20fps; the app paces sends
+
     private var width = 480
     private var height = 240
     private var quality = 40
-    private const val MIN_INTERVAL_MS = 50L // cap capture/encode to ~20fps; the app paces sends
+    private var lastEncodeMs = 0L
 
-    @Volatile private var latestJpeg: ByteArray? = null
-    @Volatile private var latestSeq = 0L
-    @Volatile private var lastEncodeMs = 0L
+    // Raw stdout (fd 1), bypassing System.out's PrintStream so binary frames aren't mangled.
+    private val frameOut = DataOutputStream(BufferedOutputStream(FileOutputStream(FileDescriptor.out)))
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -83,7 +86,7 @@ object DashServer {
             reader.setOnImageAvailableListener({ ir -> onImage(ir) }, handler)
 
             val display = createTrustedVirtualDisplay(context, "pillion-dash", width, height, dpi, reader.surface)
-            out("PILLION_DISPLAY_ID=${display.display.displayId}")
+            Log.i(TAG, "trusted display created id=${display.display.displayId}")
 
             if (launchComponent != null) {
                 val exit = exec(
@@ -91,29 +94,31 @@ object DashServer {
                     "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
                     "-n", launchComponent,
                 )
-                out("PILLION_LAUNCH_EXIT=$exit")
+                Log.i(TAG, "launched $launchComponent on display ${display.display.displayId} (exit=$exit)")
             }
-
-            startSocketServer()
-            out("PILLION_READY")
+            Log.i(TAG, "ready, streaming frames to stdout")
         } catch (t: Throwable) {
-            out("PILLION_ERROR=${t.javaClass.simpleName}: ${t.message}")
+            Log.e(TAG, "fatal", t)
             return
         }
         Looper.loop()
     }
 
-    /** Encode the newest frame to JPEG, throttled to [MIN_INTERVAL_MS]. */
+    /** Encode the newest frame to JPEG (throttled) and write it to stdout. */
     private fun onImage(reader: ImageReader) {
         val image = reader.acquireLatestImage() ?: return
         try {
             val now = System.currentTimeMillis()
             if (now - lastEncodeMs < MIN_INTERVAL_MS) return
             lastEncodeMs = now
-            latestJpeg = toJpeg(image)
-            latestSeq++
-        } catch (_: Throwable) {
-            // drop this frame
+            val jpeg = toJpeg(image)
+            frameOut.writeInt(jpeg.size)
+            frameOut.write(jpeg)
+            frameOut.flush()
+        } catch (e: Throwable) {
+            // Broken pipe = the app (reader) went away; release everything and exit.
+            Log.i(TAG, "stdout closed, exiting: ${e.message}")
+            kotlin.system.exitProcess(0)
         } finally {
             image.close()
         }
@@ -131,40 +136,6 @@ object DashServer {
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
         return out.toByteArray()
-    }
-
-    /** Accept one client at a time and push each new JPEG frame as [4-byte length][bytes]. */
-    private fun startSocketServer() {
-        val server = LocalServerSocket(SOCKET_NAME)
-        Thread {
-            while (true) {
-                val client = runCatching { server.accept() }.getOrNull() ?: break
-                serveClient(client)
-            }
-        }.apply { isDaemon = true; start() }
-    }
-
-    private fun serveClient(client: LocalSocket) {
-        try {
-            val out = DataOutputStream(client.outputStream)
-            var sentSeq = -1L
-            while (true) {
-                val seq = latestSeq
-                val frame = latestJpeg
-                if (frame != null && seq != sentSeq) {
-                    out.writeInt(frame.size)
-                    out.write(frame)
-                    out.flush()
-                    sentSeq = seq
-                } else {
-                    Thread.sleep(10)
-                }
-            }
-        } catch (_: Throwable) {
-            // client gone; loop back to accept()
-        } finally {
-            runCatching { client.close() }
-        }
     }
 
     /** A system Context with no Application — the only way to get one in a bare app_process. */
@@ -194,11 +165,6 @@ object DashServer {
         process.inputStream.bufferedReader().readText()
         process.errorStream.bufferedReader().readText()
         return process.waitFor()
-    }
-
-    private fun out(line: String) {
-        println(line)
-        System.out.flush()
     }
 
     private const val SHELL_UID = 2000
