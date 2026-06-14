@@ -93,13 +93,16 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             let img = CIImage(cvPixelBuffer: pb).oriented(fix)
             let e = img.extent
-            let scale = max(480.0 / e.width, 240.0 / e.height)
+            // Aspect-FIT (letterbox): show the whole screen, centred on the 480×240 panel with black
+            // bars. Works for landscape (near-full) and portrait (pillarboxed) without cropping.
+            let scale = min(480.0 / e.width, 240.0 / e.height)
             let s = img.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             let se = s.extent
-            let ox = se.origin.x + (se.width - 480) / 2
-            let oy = se.origin.y + (se.height - 240) / 2
-            let cropped = s.cropped(to: CGRect(x: ox, y: oy, width: 480, height: 240))
-                .transformed(by: CGAffineTransform(translationX: -ox, y: -oy))
+            let tx = (480 - se.width) / 2 - se.origin.x
+            let ty = (240 - se.height) / 2 - se.origin.y
+            let centered = s.transformed(by: CGAffineTransform(translationX: tx, y: ty))
+            let canvas = CGRect(x: 0, y: 0, width: 480, height: 240)
+            let cropped = centered.composited(over: CIImage(color: .black).cropped(to: canvas)).cropped(to: canvas)
             let opts: [CIImageRepresentationOption: Any] =
                 [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.4]
             guard let data = ci.jpegRepresentation(of: cropped, colorSpace: CGColorSpaceCreateDeviceRGB(), options: opts) else { return }

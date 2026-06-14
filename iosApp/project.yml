@@ -58,6 +58,29 @@ targets:
           mkdir -p "$DEST"
           rm -rf "$DEST/ComposeApp.framework"
           cp -R "composeApp/build/bin/${BIN_DIR}/${CONFIG_LC}Framework/ComposeApp.framework" "$DEST/"
+    postCompileScripts:
+      - name: "Sync Compose resources into app bundle"
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home 2>/dev/null)}"
+          cd "$SRCROOT/.."
+          # embedAndSignAppleFrameworkForXcode normally copies these; since we link the framework
+          # ourselves, sync the Compose resources too. The runtime reads from
+          # <bundle>/compose-resources/composeResources/<package>/... (CMP 1.7).
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then KN_TARGET="IosSimulatorArm64"; else KN_TARGET="IosArm64"; fi
+          ./gradlew ":composeApp:assemble${KN_TARGET}MainResources"
+          KN_LC=$(echo "$KN_TARGET" | awk '{print tolower(substr($0,1,1)) substr($0,2)}')
+          SRC=$(find composeApp/build -type d -path "*aggregated-resources/${KN_LC}/composeResources" | head -1)
+          DEST="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/compose-resources"
+          if [ -n "$SRC" ]; then
+            mkdir -p "$DEST"
+            rm -rf "$DEST/composeResources"
+            cp -R "$SRC" "$DEST/"
+            echo "synced Compose resources -> $DEST"
+          else
+            echo "warning: composeResources dir not found for $KN_LC" >&2
+          fi
 
   PillionBroadcast:
     type: app-extension
