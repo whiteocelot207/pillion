@@ -23,12 +23,16 @@ final class BroadcastBridge: ObservableObject {
     func register(_ picker: RPSystemBroadcastPickerView) { self.picker = picker }
 
     private func triggerPicker() {
-        guard let picker = picker else { return }
         // RPSystemBroadcastPickerView has no programmatic trigger, so tap its embedded button.
-        for sub in picker.subviews where sub is UIButton {
-            (sub as! UIButton).sendActions(for: .touchUpInside)
-            return
-        }
+        // Its view tree differs across iOS versions, so search recursively.
+        guard let picker = picker, let button = Self.firstButton(in: picker) else { return }
+        button.sendActions(for: .touchUpInside)
+    }
+
+    private static func firstButton(in view: UIView) -> UIButton? {
+        if let button = view as? UIButton { return button }
+        for sub in view.subviews { if let b = firstButton(in: sub) { return b } }
+        return nil
     }
 
     private func observeBroadcastState() {
