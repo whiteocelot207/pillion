@@ -153,26 +153,30 @@ private fun Page(
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
     Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
-            .padding(horizontal = 28.dp, vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 28.dp, vertical = 24.dp),
     ) {
-        Spacer(Modifier.height(24.dp))
-        hero()
-        Spacer(Modifier.height(36.dp))
-        Text(
-            title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        content()
-        Spacer(Modifier.height(36.dp))
+        // Content fills the available height and scrolls if needed; the actions stay pinned below.
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            hero()
+            Spacer(Modifier.height(36.dp))
+            Text(
+                title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                subtitle, style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
+            )
+            content()
+        }
+        Spacer(Modifier.height(20.dp))
         PageDots(step, total = 4)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
         Button(
             onClick = primary.second,
             modifier = Modifier.fillMaxWidth().height(54.dp),
