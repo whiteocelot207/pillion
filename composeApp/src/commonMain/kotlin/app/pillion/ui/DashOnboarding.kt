@@ -1,7 +1,7 @@
 package app.pillion.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,8 +27,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,6 +36,12 @@ import androidx.compose.ui.unit.dp
 import app.pillion.core.DashSetup
 import app.pillion.core.DashStage
 import app.pillion.core.MirrorSettings
+import app.pillion.resources.Res
+import app.pillion.resources.dash_step_dialog
+import app.pillion.resources.dash_step_paircode
+import app.pillion.resources.dash_step_toggle
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * Guided setup for "dedicated dash display" mode. Honest about the tradeoffs up front and lets the
@@ -118,7 +124,7 @@ private fun EnableDebuggingStep(onNext: () -> Unit, onBack: () -> Unit) {
         "Open Settings → System → Developer options → Wireless debugging and switch it ON. Make sure " +
             "you're connected to Wi-Fi (your home network or a hotspot).",
     )
-    ScreenshotSlot("Settings → Developer options → Wireless debugging")
+    Screenshot(Res.drawable.dash_step_toggle, "Turn \"Use wireless debugging\" on")
     StepButtons(backLabel = "Back", onBack = onBack, nextLabel = "Next", onNext = onNext)
 }
 
@@ -133,9 +139,11 @@ private fun PairStep(
     Body(
         "2. Pair with the code",
         "In Wireless debugging tap \"Pair device with pairing code\". Keep that dialog open (use " +
-            "split-screen) and copy the port and 6-digit code below. Host stays 127.0.0.1.",
+            "split-screen) and copy the values below. Host stays 127.0.0.1; the port is the number " +
+            "after the colon on the dialog's \"IP address & Port\" line.",
     )
-    ScreenshotSlot("\"Pair device with pairing code\" dialog — port & code")
+    Screenshot(Res.drawable.dash_step_paircode, "Tap \"Pair device with pairing code\"")
+    Screenshot(Res.drawable.dash_step_dialog, "Enter this 6-digit code and the port shown below it")
     OutlinedTextField(host, onHost, label = { Text("Host") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(
         port, onPort, label = { Text("Pairing port") },
@@ -182,16 +190,27 @@ private fun Body(title: String, text: String) {
     Spacer(Modifier.height(16.dp))
 }
 
-/** Placeholder for an annotated screenshot (replaced with a real cropped image resource). */
+/** A cropped instruction screenshot (no personal data) with an explanatory caption. */
 @Composable
-private fun ScreenshotSlot(caption: String) {
+private fun Screenshot(image: DrawableResource, caption: String) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth().height(160.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(caption, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(8.dp)) {
+            Image(
+                painter = painterResource(image),
+                contentDescription = caption,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                caption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+            )
         }
     }
     Spacer(Modifier.height(16.dp))
