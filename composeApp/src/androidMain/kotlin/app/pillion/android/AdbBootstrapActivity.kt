@@ -135,32 +135,48 @@ class AdbBootstrapActivity : ComponentActivity() {
                         if (target == null) { append("❌ No foreground app (grant Usage access)"); return@launch }
                         val component = packageManager.getLaunchIntentForPackage(target)?.component?.flattenToString()
                         if (component == null) { append("❌ $target has no launcher activity"); return@launch }
-                        append("Promoting $component + reading frames…")
+                        append("Spawning detached helper for $component…")
                         withContext(Dispatchers.IO) {
                             runCatching {
+                                // nohup + & : the helper outlives this ADB stream, so it keeps serving
+                                // frames after Wi-Fi drops on the bike.
                                 val cmd = "CLASSPATH=\$(pm path app.pillion | grep base.apk | cut -d: -f2) " +
-                                    "app_process / app.pillion.server.DashServer 480 240 160 40 $component 2>/dev/null"
+                                    "nohup app_process / app.pillion.server.DashServer 480 240 160 40 $component >/dev/null 2>&1 &"
                                 val stream = PillionAdb.getInstance(applicationContext).openExecStream(cmd)
-                                val src = DashStreamScreenSource(stream.openInputStream())
-                                src.start()
-                                var got = 0
-                                repeat(20) {
-                                    Thread.sleep(400)
-                                    src.latestFrame()?.let { f ->
-                                        got++
-                                        if (got <= 3) runOnUiThread { append("frame: ${f.size} bytes") }
-                                    }
-                                }
-                                src.stop(); stream.close()
-                                runOnUiThread {
-                                    append(if (got > 0) "✅ Received $got frames over exec stream" else "❌ No frames")
-                                }
-                            }.onFailure { runOnUiThread { append("❌ ${it.message}") } }
+                                stream.openInputStream().readBytes() // returns once backgrounded
+                                stream.close()
+                            }.onSuccess { runOnUiThread { append("✅ Helper spawned (detached)") } }
+                                .onFailure { runOnUiThread { append("❌ Spawn failed: ${it.message}") } }
                         }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("4. Launch helper + read stream") }
+            ) { Text("4. Launch helper (detached)") }
+
+            Button(
+                onClick = {
+                    scope.launch {
+                        append("Reading frames over loopback TCP…")
+                        withContext(Dispatchers.IO) {
+                            val src = DashStreamScreenSource()
+                            src.start()
+                            var got = 0
+                            repeat(20) {
+                                Thread.sleep(400)
+                                src.latestFrame()?.let { f ->
+                                    got++
+                                    if (got <= 3) runOnUiThread { append("frame: ${f.size} bytes") }
+                                }
+                            }
+                            src.stop()
+                            runOnUiThread {
+                                append(if (got > 0) "✅ Received $got frames over loopback TCP" else "❌ No frames (helper running?)")
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("5. Read frames (loopback TCP)") }
 
             Spacer(Modifier.height(16.dp))
             Text(log, style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)

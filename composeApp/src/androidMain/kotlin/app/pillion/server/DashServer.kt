@@ -17,8 +17,9 @@ import android.view.Surface
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
-import java.io.FileDescriptor
-import java.io.FileOutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 
 /**
  * Privileged helper for the dedicated-dash feature, run as the **shell uid** via `app_process`
@@ -28,19 +29,23 @@ import java.io.FileOutputStream
  * off.
  *
  * Pipeline: trusted VirtualDisplay -> ImageReader -> JPEG -> `[4-byte big-endian length][bytes]`
- * frames written to **stdout**. The app spawns us over the ADB `exec:` service and reads the frames
- * straight off that stream. We deliberately do NOT use a separate local socket: SELinux forbids an
- * untrusted_app from connecting to a shell-owned socket (`avc: denied { connectto } ... tcontext=
- * shell`), whereas the ADB exec stream crosses domains cleanly (it's how scrcpy streams too).
+ * frames served over a **loopback TCP socket** ([PORT]). The app connects to `127.0.0.1:PORT` and
+ * reads frames locally. We use loopback TCP rather than:
+ *   - a unix LocalSocket: SELinux forbids untrusted_app -> shell (`avc: denied { connectto } ...
+ *     tclass=unix_stream_socket`); TCP isn't subject to that domain rule.
+ *   - the ADB exec stdout stream: that dies with the ADB/Wi-Fi connection, but there is no Wi-Fi on
+ *     a moving bike. Loopback is always up, so once spawned (detached, via `nohup`) the helper keeps
+ *     serving frames with no network at all.
  *
- * Status/diagnostics go to **logcat** (tag [TAG]); stdout carries only frame bytes.
+ * Status/diagnostics go to **logcat** (tag [TAG]).
  *
- * Launch (raw exec, no PTY mangling):
- *   CLASSPATH=<base.apk> app_process / app.pillion.server.DashServer <w> <h> <dpi> <quality> <component>
+ * Launch detached so it outlives the spawning ADB connection:
+ *   CLASSPATH=<base.apk> nohup app_process / app.pillion.server.DashServer <w> <h> <dpi> <quality> <component> &
  */
 object DashServer {
 
     private const val TAG = "PillionDash"
+    const val PORT = 28115 // loopback frame port (app connects to 127.0.0.1:PORT)
 
     // Public flags exist on DisplayManager; the trusted/own-group/always-unlocked ones are @hide,
     // so use their raw bit values (verified against scrcpy + dumpsys on Android 16).
@@ -64,8 +69,8 @@ object DashServer {
     private var quality = 40
     private var lastEncodeMs = 0L
 
-    // Raw stdout (fd 1), bypassing System.out's PrintStream so binary frames aren't mangled.
-    private val frameOut = DataOutputStream(BufferedOutputStream(FileOutputStream(FileDescriptor.out)))
+    @Volatile private var latestJpeg: ByteArray? = null
+    @Volatile private var latestSeq = 0L
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -96,7 +101,8 @@ object DashServer {
                 )
                 Log.i(TAG, "launched $launchComponent on display ${display.display.displayId} (exit=$exit)")
             }
-            Log.i(TAG, "ready, streaming frames to stdout")
+            startTcpServer()
+            Log.i(TAG, "ready, serving frames on 127.0.0.1:$PORT")
         } catch (t: Throwable) {
             Log.e(TAG, "fatal", t)
             return
@@ -104,23 +110,54 @@ object DashServer {
         Looper.loop()
     }
 
-    /** Encode the newest frame to JPEG (throttled) and write it to stdout. */
+    /** Encode the newest frame to JPEG (throttled) and keep it for the TCP server to push. */
     private fun onImage(reader: ImageReader) {
         val image = reader.acquireLatestImage() ?: return
         try {
             val now = System.currentTimeMillis()
             if (now - lastEncodeMs < MIN_INTERVAL_MS) return
             lastEncodeMs = now
-            val jpeg = toJpeg(image)
-            frameOut.writeInt(jpeg.size)
-            frameOut.write(jpeg)
-            frameOut.flush()
-        } catch (e: Throwable) {
-            // Broken pipe = the app (reader) went away; release everything and exit.
-            Log.i(TAG, "stdout closed, exiting: ${e.message}")
-            kotlin.system.exitProcess(0)
+            latestJpeg = toJpeg(image)
+            latestSeq++
+        } catch (_: Throwable) {
+            // drop this frame
         } finally {
             image.close()
+        }
+    }
+
+    /** Serve `[4-byte length][JPEG]` frames over loopback TCP — works with no network (no Wi-Fi). */
+    private fun startTcpServer() {
+        val server = ServerSocket(PORT, 1, InetAddress.getByName("127.0.0.1"))
+        Thread {
+            while (true) {
+                val client = runCatching { server.accept() }.getOrNull() ?: break
+                serveClient(client)
+            }
+        }.apply { isDaemon = false; start() }
+    }
+
+    private fun serveClient(client: Socket) {
+        try {
+            client.tcpNoDelay = true
+            val out = DataOutputStream(BufferedOutputStream(client.getOutputStream()))
+            var sentSeq = -1L
+            while (true) {
+                val seq = latestSeq
+                val frame = latestJpeg
+                if (frame != null && seq != sentSeq) {
+                    out.writeInt(frame.size)
+                    out.write(frame)
+                    out.flush()
+                    sentSeq = seq
+                } else {
+                    Thread.sleep(10)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.i(TAG, "client disconnected: ${e.message}")
+        } finally {
+            runCatching { client.close() }
         }
     }
 
