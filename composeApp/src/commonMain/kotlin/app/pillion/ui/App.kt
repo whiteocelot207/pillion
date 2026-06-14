@@ -61,6 +61,7 @@ fun App(
                 onFinish = {
                     dashEnabled = true; settingsStore?.setDashEnabled(true); showDashOnboarding = false
                 },
+                onClose = { showDashOnboarding = false },
             )
         } else if (showSettings) {
             SettingsScreen(

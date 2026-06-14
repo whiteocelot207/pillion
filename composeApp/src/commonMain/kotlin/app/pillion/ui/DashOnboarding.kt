@@ -21,11 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -70,6 +71,7 @@ internal fun DashOnboarding(
     settings: MirrorSettings,
     onOptOut: () -> Unit,
     onFinish: () -> Unit,
+    onClose: () -> Unit,
 ) {
     val state by dash.state.collectAsState()
     var step by remember { mutableStateOf(0) }
@@ -77,6 +79,7 @@ internal fun DashOnboarding(
     var code by remember { mutableStateOf("") }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+      Box(Modifier.fillMaxSize()) {
         when (step) {
             0 -> Page(
                 hero = { IconHero(Icons.Filled.TwoWheeler) },
@@ -137,6 +140,17 @@ internal fun DashOnboarding(
                 }
             }
         }
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(4.dp),
+        ) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Close setup",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+      }
     }
 }
 
