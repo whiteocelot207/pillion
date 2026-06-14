@@ -1,8 +1,20 @@
+import Foundation
 import ReplayKit
 import CoreImage
 import CoreMedia
 import ImageIO
 import ExternalAccessory
+
+/// Darwin notification names the app observes to reflect broadcast state (no App Group needed).
+enum BroadcastSignal {
+    static let started = "app.pillion.broadcast.started"
+    static let stopped = "app.pillion.broadcast.stopped"
+    static func post(_ name: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(name as CFString), nil, nil, true)
+    }
+}
 
 /// Broadcast Upload Extension: captures the whole screen system-wide and streams it to the dash as
 /// NaviLite. Because it runs as a broadcast it keeps going while the phone is in Waze/Maps. Ported
@@ -18,6 +30,7 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         running = true
+        BroadcastSignal.post(BroadcastSignal.started)
         let hasBike = EAAccessoryManager.shared().connectedAccessories
             .contains { $0.protocolStrings.contains(BroadcastConfig.dashProtocol) }
         let c: DashConn = hasBike ? EAConn()
@@ -63,32 +76,40 @@ class SampleHandler: RPBroadcastSampleHandler {
     override func processSampleBuffer(_ sb: CMSampleBuffer, with type: RPSampleBufferType) {
         guard type == .video, running else { return }
         let now = Date(); if now.timeIntervalSince(lastEncode) < 0.045 { return }; lastEncode = now
-        guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-        var orient = CGImagePropertyOrientation.up
-        if let n = CMGetAttachment(sb, key: RPVideoSampleOrientationKey as CFString, attachmentModeOut: nil) as? NSNumber,
-           let o = CGImagePropertyOrientation(rawValue: n.uint32Value) { orient = o }
-        let fix: CGImagePropertyOrientation
-        switch orient {
-        case .left: fix = .right
-        case .right: fix = .left
-        case .leftMirrored: fix = .rightMirrored
-        case .rightMirrored: fix = .leftMirrored
-        default: fix = orient   // up/down are self-inverse
+        // Broadcast extensions are killed past ~50 MB. CoreImage/JPEG temporaries pile up faster than
+        // ARC drains them at frame rate, so each encode runs in its own autorelease pool.
+        autoreleasepool {
+            guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+            var orient = CGImagePropertyOrientation.up
+            if let n = CMGetAttachment(sb, key: RPVideoSampleOrientationKey as CFString, attachmentModeOut: nil) as? NSNumber,
+               let o = CGImagePropertyOrientation(rawValue: n.uint32Value) { orient = o }
+            let fix: CGImagePropertyOrientation
+            switch orient {
+            case .left: fix = .right
+            case .right: fix = .left
+            case .leftMirrored: fix = .rightMirrored
+            case .rightMirrored: fix = .leftMirrored
+            default: fix = orient   // up/down are self-inverse
+            }
+            let img = CIImage(cvPixelBuffer: pb).oriented(fix)
+            let e = img.extent
+            let scale = max(480.0 / e.width, 240.0 / e.height)
+            let s = img.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let se = s.extent
+            let ox = se.origin.x + (se.width - 480) / 2
+            let oy = se.origin.y + (se.height - 240) / 2
+            let cropped = s.cropped(to: CGRect(x: ox, y: oy, width: 480, height: 240))
+                .transformed(by: CGAffineTransform(translationX: -ox, y: -oy))
+            let opts: [CIImageRepresentationOption: Any] =
+                [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.4]
+            guard let data = ci.jpegRepresentation(of: cropped, colorSpace: CGColorSpaceCreateDeviceRGB(), options: opts) else { return }
+            lock.lock(); latest = [UInt8](data); lock.unlock()
         }
-        let img = CIImage(cvPixelBuffer: pb).oriented(fix)
-        let e = img.extent
-        let scale = max(480.0 / e.width, 240.0 / e.height)
-        let s = img.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let se = s.extent
-        let ox = se.origin.x + (se.width - 480) / 2
-        let oy = se.origin.y + (se.height - 240) / 2
-        let cropped = s.cropped(to: CGRect(x: ox, y: oy, width: 480, height: 240))
-            .transformed(by: CGAffineTransform(translationX: -ox, y: -oy))
-        let opts: [CIImageRepresentationOption: Any] =
-            [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.4]
-        guard let data = ci.jpegRepresentation(of: cropped, colorSpace: CGColorSpaceCreateDeviceRGB(), options: opts) else { return }
-        lock.lock(); latest = [UInt8](data); lock.unlock()
     }
 
-    override func broadcastFinished() { running = false; conn?.close() }
+    override func broadcastFinished() {
+        running = false
+        BroadcastSignal.post(BroadcastSignal.stopped)
+        conn?.close()
+    }
 }

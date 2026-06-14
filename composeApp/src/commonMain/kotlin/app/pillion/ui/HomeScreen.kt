@@ -166,6 +166,18 @@ private fun StatusDisplay(state: MirrorState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            MirrorState.Broadcasting -> {
+                StatusDot(MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(14.dp))
+                Text("Broadcasting", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Open Waze or Google Maps — it's on your dash.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             is MirrorState.Error -> {
                 StatusDot(MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(14.dp))
@@ -235,7 +247,8 @@ private fun StepRow(number: Int, text: String) {
 
 @Composable
 private fun PrimaryButton(state: MirrorState, onStart: () -> Unit, onStop: () -> Unit) {
-    val active = state is MirrorState.Streaming || state is MirrorState.Connecting
+    val active = state is MirrorState.Streaming || state is MirrorState.Connecting ||
+        state is MirrorState.Broadcasting
     Button(
         onClick = if (active) onStop else onStart,
         modifier = Modifier.fillMaxWidth().height(56.dp),

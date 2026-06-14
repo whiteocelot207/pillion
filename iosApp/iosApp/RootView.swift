@@ -1,15 +1,19 @@
 import SwiftUI
-import ComposeApp
 
-/// Entry view. Release builds go straight to the bike; debug builds show the dev launcher so you can
-/// pick the emulator loopback or the bike (see DevLauncher).
+/// The iOS app: the shared Pillion Compose UI, with "Start mirroring" wired to the system screen
+/// broadcast (the upload extension does the capture + streaming). A hidden picker host sits off-screen
+/// so the Compose button can trigger it.
 struct RootView: View {
+    @StateObject private var bridge = BroadcastBridge()
+
     var body: some View {
-        #if DEBUG
-        DevLauncher()
-        #else
-        ComposeScreen { MainViewControllerKt.MainViewControllerForBike(protocolString: bikeProtocolString) }
-            .ignoresSafeArea()
-        #endif
+        ZStack {
+            ComposeScreen { bridge.makeViewController() }
+                .ignoresSafeArea()
+            BroadcastPickerHost(bridge: bridge)
+                .frame(width: 44, height: 44)
+                .position(x: -200, y: -200)   // kept in the hierarchy but off-screen
+                .allowsHitTesting(false)
+        }
     }
 }
