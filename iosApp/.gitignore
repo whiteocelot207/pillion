@@ -6,3 +6,6 @@ Signing.xcconfig
 build/
 DerivedData/
 **/xcuserdata/
+# Distributable artifacts (published to GitHub Releases, not committed)
+Pillion.ipa
+Payload/
