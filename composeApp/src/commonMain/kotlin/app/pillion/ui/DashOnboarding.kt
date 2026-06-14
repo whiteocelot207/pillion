@@ -127,18 +127,13 @@ internal fun DashOnboarding(
             }
             else -> Page(
                 hero = { IconHero(Icons.Filled.CheckCircle) },
-                title = "You're ready",
-                subtitle = "Open the app you want on the dash, come back, and tap Cast. Then block your " +
-                    "phone — the dash keeps showing it. You only redo this after a phone restart.",
+                title = "You're all set",
+                subtitle = "Open your nav app and start Pillion as usual. While you ride with the phone " +
+                    "unlocked it mirrors your screen — lock the phone and your nav automatically stays " +
+                    "on the dash, screen off. Redo this setup only after a phone restart.",
                 step = 3,
-                primary = "Cast foreground app" to { dash.startCast(settings) },
-                secondary = "Done" to onFinish,
-            ) {
-                if (state.stage == DashStage.Casting) {
-                    Spacer(Modifier.height(12.dp))
-                    Text("✅ Casting", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+                primary = "Done" to onFinish,
+            )
         }
         IconButton(
             onClick = onClose,
