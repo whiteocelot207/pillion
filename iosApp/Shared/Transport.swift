@@ -20,4 +20,7 @@ enum BroadcastConfig {
     /// Dev fallback: the NaviLite receiver's TCP dash. Used when no bike accessory is connected.
     static let emulatorHost = "192.168.1.183"
     static let emulatorPort: UInt16 = 7220
+    /// Target frames per second. The sender paces to this and always ships the latest frame, so a
+    /// fast link (WiFi emulator) doesn't flood and build latency. The bike (~15 fps) is the ceiling.
+    static let maxFps: Int = 15
 }

@@ -27,6 +27,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var lastEncode = Date(timeIntervalSince1970: 0)
     private var running = false
     private var seq = 1
+    private let sendInterval = 1.0 / Double(BroadcastConfig.maxFps)
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         running = true
@@ -61,9 +62,15 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     private func pushLoop() {
         var frames = 0; var t0 = Date()
+        var lastSend = Date(timeIntervalSince1970: 0)
         while running {
+            // Pace to the target fps and always send the freshest frame. Without this we send as fast
+            // as the link ACKs (~77 fps on WiFi), flooding the dash/viewer so latency builds up.
+            let wait = sendInterval - Date().timeIntervalSince(lastSend)
+            if wait > 0 { usleep(UInt32(wait * 1_000_000)) }
             lock.lock(); let j = latest; lock.unlock()
             guard let jpg = j else { usleep(15000); continue }
+            lastSend = Date()
             var pl: [UInt8] = [3, UInt8(seq & 0xff), UInt8((seq >> 8) & 0xff)]; pl.append(contentsOf: jpg); seq += 1
             conn.write(NaviLite.frame(6, 0, 1, pl))
             let deadline = Date().addingTimeInterval(2)
@@ -75,7 +82,8 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     override func processSampleBuffer(_ sb: CMSampleBuffer, with type: RPSampleBufferType) {
         guard type == .video, running else { return }
-        let now = Date(); if now.timeIntervalSince(lastEncode) < 0.045 { return }; lastEncode = now
+        // Encode a touch faster than we send so a fresh frame is always ready, but no faster.
+        let now = Date(); if now.timeIntervalSince(lastEncode) < sendInterval * 0.8 { return }; lastEncode = now
         // Broadcast extensions are killed past ~50 MB. CoreImage/JPEG temporaries pile up faster than
         // ARC drains them at frame rate, so each encode runs in its own autorelease pool.
         autoreleasepool {
