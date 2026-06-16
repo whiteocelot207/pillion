@@ -49,19 +49,27 @@ object DashServer {
     const val PORT = 28115 // loopback frame port (app connects to 127.0.0.1:PORT)
 
     // Public flags exist on DisplayManager; the trusted/own-group/always-unlocked ones are @hide,
-    // so use their raw bit values (verified against scrcpy + dumpsys on Android 16).
+    // so use their raw bit values (matched exactly to scrcpy's NewDisplayCapture on Android 14+).
     private const val FLAG_PUBLIC = 1 shl 0
     private const val FLAG_PRESENTATION = 1 shl 1
     private const val FLAG_OWN_CONTENT_ONLY = 1 shl 3
+    private const val FLAG_SUPPORTS_TOUCH = 1 shl 6
+    private const val FLAG_ROTATES_WITH_CONTENT = 1 shl 7
     private const val FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS = 1 shl 9
     private const val FLAG_TRUSTED = 1 shl 10
     private const val FLAG_OWN_DISPLAY_GROUP = 1 shl 11
     private const val FLAG_ALWAYS_UNLOCKED = 1 shl 12
     private const val FLAG_TOUCH_FEEDBACK_DISABLED = 1 shl 13
+    private const val FLAG_OWN_FOCUS = 1 shl 14
+    // The key flag (Android 14+): puts the display in a power group that survives the phone screen
+    // turning off — without it the virtual display lands in display group 0 and dies with the panel.
+    private const val FLAG_DEVICE_DISPLAY_GROUP = 1 shl 15
 
     private const val FLAGS = FLAG_PUBLIC or FLAG_PRESENTATION or FLAG_OWN_CONTENT_ONLY or
+        FLAG_SUPPORTS_TOUCH or FLAG_ROTATES_WITH_CONTENT or
         FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS or FLAG_TRUSTED or FLAG_OWN_DISPLAY_GROUP or
-        FLAG_ALWAYS_UNLOCKED or FLAG_TOUCH_FEEDBACK_DISABLED
+        FLAG_ALWAYS_UNLOCKED or FLAG_TOUCH_FEEDBACK_DISABLED or
+        FLAG_OWN_FOCUS or FLAG_DEVICE_DISPLAY_GROUP
 
     private const val MIN_INTERVAL_MS = 50L // cap capture/encode to ~20fps; the app paces sends
 
@@ -315,15 +323,10 @@ object DashServer {
      * awake, and the dash keeps rendering. Restored on demote/shutdown.
      */
     private fun setMainDisplayPower(on: Boolean) {
-        // Reliable visible effect on GrapheneOS shell-uid: drop the phone's panel brightness to ~0.
-        // (True panel-off via setDisplayPowerMode needs libandroid_servers natives that won't load in
-        // app_process; requestDisplayPower is a no-op here — so brightness is the dependable lever.)
-        if (on) {
-            exec("settings", "put", "system", "screen_brightness_mode", "1") // restore auto-brightness
-        } else {
-            exec("settings", "put", "system", "screen_brightness_mode", "0") // manual
-            exec("settings", "put", "system", "screen_brightness", "0")
-        }
+        // Try the real panel-off APIs only. (Brightness-0 dimming was removed — it doesn't truly turn
+        // the screen off and isn't wanted.) On phones where these work the panel goes off; on stock
+        // AOSP/Pixel they're a no-op (token needs libandroid_servers natives that won't load in
+        // app_process; requestDisplayPower is a no-op) — there's no real screen-off there.
         // Primary: SurfaceControl.setDisplayPowerMode(token, mode) — actually blanks the panel at the
         // SurfaceFlinger level while the system stays awake (scrcpy's --turn-screen-off).
         val token = mainDisplayToken()
@@ -386,7 +389,10 @@ object DashServer {
         // load DisplayControl via the app classloader (the helper is spawned with services.jar on its
         // CLASSPATH) — NOT a child PathClassLoader, or RegisterNatives won't match (UnsatisfiedLinkError).
         runCatching {
-            runCatching { System.loadLibrary("android_servers") }
+            val loaded = runCatching { System.loadLibrary("android_servers") }
+                .recoverCatching { System.load("/system/lib64/libandroid_servers.so") }
+                .recoverCatching { System.load("/system/lib/libandroid_servers.so") }
+            Log.i(TAG, "panel: load libandroid_servers ${if (loaded.isSuccess) "OK" else "FAIL: ${loaded.exceptionOrNull()?.message}"}")
             val dc = Class.forName("com.android.server.display.DisplayControl")
             val ids = dc.getMethod("getPhysicalDisplayIds").apply { isAccessible = true }
                 .invoke(null) as LongArray
