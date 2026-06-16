@@ -189,18 +189,22 @@ class CaptureService : Service() {
         // Clear any stale helper from a previous session while ADB is available.
         runCatching { adb.runShell("pkill -f app.pillion.server.DashServer") }
         Log.d(TAG, "dash: spawning helper virtual=${dashResolution.width}x${dashResolution.height}")
-        // Orphan the helper to init (pid 1) — the same trick Shizuku's native starter uses: a wrapping
-        // shell backgrounds app_process and then exits, so the helper reparents to init. adbd only
-        // reaps its own *direct* children, so once orphaned the helper survives ADB disconnect AND
-        // wifi loss (verified on Pixel 9a / GrapheneOS). After spawn the helper serves frames over
+        // Detach the helper so it survives ADB disconnect AND wifi loss — the same outcome as
+        // Shizuku's native starter, achieved here with two cooperating tricks (both required,
+        // verified on Pixel 9a / GrapheneOS):
+        //   1. `setsid` puts the helper in a NEW session/process-group, so adbd's process-group
+        //      SIGKILL on stream close (the `exec:`/`shell:` teardown) can't reach it.
+        //   2. the wrapping shell backgrounds app_process (`&`) and exits, so the helper reparents
+        //      to init (pid 1) — adbd only reaps its own direct children.
+        // Without setsid the backgrounded helper stays in the doomed group and dies; without the
+        // orphan it stays a direct child of adbd and dies. After spawn the helper serves frames over
         // loopback (127.0.0.1:28115) and the app drives PROMOTE/DEMOTE/QUIT over that same socket, so
         // no network is needed for the rest of the session — this is what makes the no-wifi ride work.
-        // (A plain `exec app_process &` leaves it a direct child of adbd, which adbd then kills.)
         val inner = "CLASSPATH=\$(pm path $packageName | grep base.apk | cut -d: -f2) " +
             "app_process / app.pillion.server.DashServer " +
             "${dashResolution.width} ${dashResolution.height} 160 $quality 480 240 " +
             "</dev/null >/dev/null 2>&1 &"
-        val stream = adb.openShellStream("sh -c '$inner'")
+        val stream = adb.openShellStream("setsid sh -c '$inner'")
         // The wrapper shell exits as soon as it backgrounds the helper, so this returns quickly; the
         // helper is already detached by then. Fire-and-forget — we don't hold the stream open.
         runCatching { stream.openInputStream().readBytes() }
