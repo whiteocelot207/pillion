@@ -100,19 +100,24 @@ class CaptureService : Service() {
     private fun registerScreenReceiver() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context, intent: Intent) {
-                when (intent.action) {
-                    Intent.ACTION_SCREEN_OFF -> {
-                        val component = foregroundComponent()
-                        Log.d(TAG, "dash: screen off; foreground=$component")
-                        if (component == null) {
-                            Log.w(TAG, "dash: no foreground app; usage access may be missing")
-                        } else {
-                            dashSwitch?.promote(component)
+                val action = intent.action
+                // onReceive runs on the main thread; promote/demote write to the helper socket, which
+                // is network I/O (NetworkOnMainThreadException otherwise), so do it off the main thread.
+                scope.launch(Dispatchers.IO) {
+                    when (action) {
+                        Intent.ACTION_SCREEN_OFF -> {
+                            val component = foregroundComponent()
+                            Log.d(TAG, "dash: screen off; foreground=$component")
+                            if (component == null) {
+                                Log.w(TAG, "dash: no foreground app; usage access may be missing")
+                            } else {
+                                dashSwitch?.promote(component)
+                            }
                         }
-                    }
-                    Intent.ACTION_USER_PRESENT -> {
-                        Log.d(TAG, "dash: user present; demoting")
-                        dashSwitch?.demote()
+                        Intent.ACTION_USER_PRESENT -> {
+                            Log.d(TAG, "dash: user present; demoting")
+                            dashSwitch?.demote()
+                        }
                     }
                 }
             }
