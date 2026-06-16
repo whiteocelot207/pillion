@@ -105,27 +105,34 @@ object DashHelper {
     @Synchronized
     fun startWatchdog(context: Context, quality: Int, dashResolution: DashResolution) {
         if (watchdog?.isAlive == true) return // exactly one watchdog, even across session restarts
-        watchdog = null
         val appContext = context.applicationContext
-        watchdog = Thread {
-            while (!Thread.currentThread().isInterrupted) {
-                try {
-                    Thread.sleep(WATCHDOG_INTERVAL_MS)
-                } catch (_: InterruptedException) {
-                    break
+        // Each thread checks `watchdog === this`: if it's no longer the designated watchdog (a new one
+        // started, or stopWatchdog nulled it), it exits — so we never end up with two fighting.
+        val thread = object : Thread("dash-watchdog") {
+            override fun run() {
+                while (watchdog === this && !isInterrupted) {
+                    try {
+                        sleep(WATCHDOG_INTERVAL_MS)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                    if (watchdog !== this) break
+                    if (DashHelper.isRunning()) continue
+                    // A helper we just spawned is still coming up; don't pkill+respawn it mid-startup.
+                    if (SystemClock.elapsedRealtime() - lastSpawnAt < SPAWN_GRACE_MS) continue
+                    Log.w(TAG, "dash: helper down — attempting respawn over loopback")
+                    runCatching { ensureRunning(appContext, quality, dashResolution) }
+                        .onSuccess { Log.i(TAG, "dash: helper respawned") }
+                        .onFailure { Log.w(TAG, "dash: respawn failed (offline / adb gone): ${it.message}") }
                 }
-                if (isRunning()) continue
-                // A helper we just spawned is still coming up; don't pkill+respawn it mid-startup.
-                if (SystemClock.elapsedRealtime() - lastSpawnAt < SPAWN_GRACE_MS) continue
-                Log.w(TAG, "dash: helper down — attempting respawn over loopback")
-                runCatching { ensureRunning(appContext, quality, dashResolution) }
-                    .onSuccess { Log.i(TAG, "dash: helper respawned") }
-                    .onFailure { Log.w(TAG, "dash: respawn failed (offline / adb gone): ${it.message}") }
             }
-        }.apply { isDaemon = true; name = "dash-watchdog"; start() }
+        }.apply { isDaemon = true }
+        watchdog = thread
+        thread.start()
         Log.d(TAG, "dash: watchdog started")
     }
 
+    @Synchronized
     fun stopWatchdog() {
         watchdog?.interrupt()
         watchdog = null
