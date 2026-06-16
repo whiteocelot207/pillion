@@ -84,10 +84,21 @@ class CaptureService : Service() {
         val source: ScreenSource = if (dashEnabled) {
             val switch = SwitchableScreenSource(mirror, DashStreamScreenSource())
             dashSwitch = switch
-            // Spawn the helper once (needs the ADB connection); it serves over loopback afterwards.
+            // Spawn or reuse the helper. Starting it needs Wireless Debugging, but an already-running
+            // helper serves over loopback and survives Wi-Fi loss.
             scope.launch(Dispatchers.IO) {
-                runCatching { spawnHelper(quality, dashResolution) }
-                    .onFailure { Log.e(TAG, "dash: helper spawn failed", it) }
+                runCatching {
+                    DashHelper.ensureRunning(
+                        this@CaptureService,
+                        quality,
+                        dashResolution,
+                        preferExisting = true,
+                    )
+                }
+                    .onFailure {
+                        Log.e(TAG, "dash: helper unavailable", it)
+                        fail(it.message ?: "Dash helper unavailable")
+                    }
             }
             registerScreenReceiver()
             switch
@@ -202,55 +213,6 @@ class CaptureService : Service() {
         mirror.start(scope)
     }
 
-    private fun spawnHelper(quality: Int, dashResolution: DashResolution) {
-        // No app argument: the helper creates the trusted display idle and waits for PROMOTE on lock.
-        // Keep dpi at 160 so larger presets expose more dp to nav apps, then scale to the TFT.
-        val adb = PillionAdb.getInstance(this)
-        val connected = runCatching { adb.autoConnectDevice(this, timeoutMs = 15_000) }
-            .onSuccess { Log.d(TAG, "dash: adb auto-connect=$it") }
-            .onFailure { Log.w(TAG, "dash: adb auto-connect failed", it) }
-            .getOrDefault(false)
-        check(connected) { "Wireless debugging is not connected" }
-        runCatching { adb.prepareDashPrivileges(this) }
-            .onSuccess { Log.d(TAG, "dash: granted usage-stats appop through shell") }
-            .onFailure { Log.w(TAG, "dash: could not grant usage-stats appop", it) }
-        // Clear any stale helper from a previous session while ADB is available.
-        runCatching { adb.runShell("pkill -f app.pillion.server.DashServer") }
-        Log.d(
-            TAG,
-            "dash: spawning helper virtual=${dashResolution.width}x${dashResolution.height} " +
-                "output=${DASH_PROTOCOL_WIDTH}x$DASH_PROTOCOL_HEIGHT",
-        )
-        // Detach the helper so it survives ADB disconnect AND wifi loss — the same outcome as
-        // Shizuku's native starter, achieved here with two cooperating tricks (both required,
-        // verified on Pixel 9a / GrapheneOS):
-        //   1. `setsid` puts the helper in a NEW session/process-group, so adbd's process-group
-        //      SIGKILL on stream close (the `exec:`/`shell:` teardown) can't reach it.
-        //   2. the wrapping shell backgrounds app_process (`&`) and exits, so the helper reparents
-        //      to init (pid 1) — adbd only reaps its own direct children.
-        // Without setsid the backgrounded helper stays in the doomed group and dies; without the
-        // orphan it stays a direct child of adbd and dies. After spawn the helper serves frames over
-        // loopback (127.0.0.1:28115) and the app drives PROMOTE/DEMOTE/QUIT over that same socket, so
-        // no network is needed for the rest of the session — this is what makes the no-wifi ride work.
-        // Include SYSTEMSERVERCLASSPATH so the helper can load com.android.server.display.DisplayControl
-        // on its main classloader (needed to turn the phone's panel off via SurfaceControl while keeping
-        // the device awake — see DashServer.mainDisplayToken).
-        val inner = "CLASSPATH=\$(pm path $packageName | grep base.apk | cut -d: -f2):\$SYSTEMSERVERCLASSPATH " +
-            "app_process / app.pillion.server.DashServer " +
-            "${dashResolution.width} ${dashResolution.height} 160 $quality " +
-            "$DASH_PROTOCOL_WIDTH $DASH_PROTOCOL_HEIGHT " +
-            "</dev/null >/dev/null 2>&1 &"
-        val stream = adb.openShellStream("setsid sh -c '$inner'")
-        // The wrapper shell exits as soon as it backgrounds the helper, so this returns quickly; the
-        // helper is already detached by then. Fire-and-forget — we don't hold the stream open.
-        runCatching { stream.openInputStream().readBytes() }
-            .onFailure { t ->
-                if (t.message?.contains("Stream closed", ignoreCase = true) != true) throw t
-            }
-        runCatching { stream.close() }
-        Log.d(TAG, "dash: helper spawned (detached to init)")
-    }
-
     private fun dashResolutionFrom(intent: Intent?): DashResolution {
         val width = intent?.getIntExtra(EXTRA_DASH_WIDTH, DashResolution.DEFAULT.width)
             ?: DashResolution.DEFAULT.width
@@ -345,8 +307,6 @@ class CaptureService : Service() {
         private const val TAG = "Pillion"
         private const val MAX_SESSION_MS = 3L * 60 * 60 * 1000 // 3h safety cap
         private const val RETURN_TO_PHONE_GRACE_MS = 3_000L
-        private const val DASH_PROTOCOL_WIDTH = 480
-        private const val DASH_PROTOCOL_HEIGHT = 240
         const val ACTION_STOP = "app.pillion.action.STOP"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_MAX_FPS = "maxFps"

@@ -24,14 +24,20 @@ class AndroidDashSetup(
     private val requestNotificationPermission: () -> Unit = {},
 ) : DashSetup {
     private val context = context.applicationContext
+    private val settings = AndroidSettingsStore(this.context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(DashState())
     override val state: StateFlow<DashState> = _state.asStateFlow()
+    @Volatile private var helperPrepared = false
 
     init {
         scope.launch {
             AdbPairingCoordinator.state.collect { state ->
                 _state.value = DashState(state.stage, state.message)
+                if (state.stage == DashStage.Connected && !helperPrepared) {
+                    helperPrepared = true
+                    prepareHelper()
+                }
             }
         }
     }
@@ -57,6 +63,25 @@ class AndroidDashSetup(
     }
 
     override fun connect() {
+        helperPrepared = false
         AdbPairingCoordinator.connect(context)
+    }
+
+    private fun prepareHelper() {
+        _state.value = DashState(DashStage.Connecting, "Preparing dash display for offline rides...")
+        runCatching {
+            DashHelper.ensureRunning(context, DashHelper.DEFAULT_QUALITY, settings.dashResolution())
+        }.onSuccess {
+            _state.value = DashState(
+                DashStage.Connected,
+                "Ready. You can start without Wi-Fi until the phone restarts.",
+            )
+        }.onFailure { t ->
+            helperPrepared = false
+            _state.value = DashState(
+                DashStage.Error,
+                t.message ?: "Connected, but dash helper could not be prepared.",
+            )
+        }
     }
 }

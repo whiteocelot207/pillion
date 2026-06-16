@@ -205,8 +205,8 @@ internal fun SettingsScreen(
                 DashResolutionSelector(dashResolution, onDashResolution)
             }
             Text(
-                "Casts the real app to the dash in landscape with the screen off. Needs a one-time " +
-                    "Wireless-debugging setup before each ride, redone after a phone restart.",
+                "Casts the real app to the dash in landscape with the screen off. Run setup once " +
+                    "while Wi-Fi is connected; after that it can start without Wi-Fi until restart.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 6.dp, top = 8.dp, end = 6.dp),

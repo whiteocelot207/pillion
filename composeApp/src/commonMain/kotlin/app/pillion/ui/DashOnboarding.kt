@@ -130,7 +130,8 @@ internal fun DashOnboarding(
                 title = "You're all set",
                 subtitle = "Open your nav app and start Pillion as usual. While you ride with the phone " +
                     "unlocked it mirrors your screen — lock the phone and your nav automatically stays " +
-                    "on the dash, screen off. Redo this setup only after a phone restart.",
+                    "on the dash, screen off. Keep Wi-Fi available for setup; after that it works " +
+                    "without Wi-Fi until the phone restarts.",
                 step = 3,
                 primary = "Done" to onFinish,
             )
