@@ -25,6 +25,21 @@ APP=$(find "$DD/Build/Products" -maxdepth 2 -name 'iosApp.app' | head -1)
 
 mkdir -p Payload
 cp -R "$APP" Payload/
+
+# Ad-hoc sign inside-out (extension first, then app) so the IPA ships with a COMPLETE, well-formed
+# nested signature structure: the app's CodeResources seals the appex's cdhash, and every Mach-O has a
+# real signature slot. Re-signers (Sideloadly/AltStore) then just *replace* that structure with the
+# user's Apple ID — a `codesign --force` over an existing signature is reliable. Shipping fully unsigned
+# instead forces the re-signer to *synthesize* the nested appex seal from nothing, which Sideloadly does
+# wrong → the appex's on-disk pages don't match its seal → the kernel SIGKILLs it at launch with
+# "CODESIGNING / Invalid Page" (the broadcast extension dies instantly, dash stays blank).
+PAYAPP="Payload/iosApp.app"
+find "$PAYAPP/PlugIns" -name '*.appex' -print0 2>/dev/null | while IFS= read -r -d '' appex; do
+  codesign --force --sign - --timestamp=none "$appex"
+done
+codesign --force --sign - --timestamp=none "$PAYAPP"
+echo "ad-hoc signed (inside-out): $(codesign -dv "$PAYAPP" 2>&1 | grep -c 'Signature=adhoc') adhoc seal on app"
+
 zip -qry Pillion.ipa Payload
 rm -rf Payload
 
