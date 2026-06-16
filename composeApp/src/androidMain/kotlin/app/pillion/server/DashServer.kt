@@ -79,6 +79,11 @@ object DashServer {
     private var outputHeight = 240
     private var quality = 40
     private var lastEncodeMs = 0L
+    private var encodeWindowStartMs = 0L
+    private var encodeFrames = 0
+    private var encodeBytes = 0L
+    private var encodeMsTotal = 0L
+    private var encodeMsMax = 0L
 
     @Volatile private var latestJpeg: ByteArray? = null
     @Volatile private var latestSeq = 0L
@@ -153,8 +158,12 @@ object DashServer {
             val now = System.currentTimeMillis()
             if (now - lastEncodeMs < MIN_INTERVAL_MS) return
             lastEncodeMs = now
-            latestJpeg = toJpeg(image)
+            val encodeStart = System.currentTimeMillis()
+            val jpeg = toJpeg(image)
+            val encodeMs = System.currentTimeMillis() - encodeStart
+            latestJpeg = jpeg
             latestSeq++
+            logEncodeStats(jpeg.size, encodeMs)
         } catch (_: Throwable) {
             // drop this frame
         } finally {
@@ -516,6 +525,30 @@ object DashServer {
         if (bitmap !== padded) bitmap.recycle()
         padded.recycle()
         return out.toByteArray()
+    }
+
+    private fun logEncodeStats(bytes: Int, encodeMs: Long) {
+        val now = System.currentTimeMillis()
+        if (encodeWindowStartMs == 0L) encodeWindowStartMs = now
+        encodeFrames++
+        encodeBytes += bytes.toLong()
+        encodeMsTotal += encodeMs
+        if (encodeMs > encodeMsMax) encodeMsMax = encodeMs
+        val elapsed = now - encodeWindowStartMs
+        if (elapsed >= 1000L) {
+            val avgKb = if (encodeFrames > 0) encodeBytes / encodeFrames / 1024 else 0L
+            val avgEncodeMs = if (encodeFrames > 0) encodeMsTotal / encodeFrames else 0L
+            Log.i(
+                TAG,
+                "encode: $encodeFrames frames, $avgKb KB/frame, " +
+                    "$avgEncodeMs ms avg/${encodeMsMax} ms max",
+            )
+            encodeWindowStartMs = now
+            encodeFrames = 0
+            encodeBytes = 0L
+            encodeMsTotal = 0L
+            encodeMsMax = 0L
+        }
     }
 
     /** A system Context with no Application — the only way to get one in a bare app_process. */

@@ -2,6 +2,7 @@ package app.pillion.android
 
 import android.app.Notification
 import android.app.NotificationChannel
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.Service
 import android.app.usage.UsageEvents
@@ -10,6 +11,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -28,6 +30,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.lang.reflect.Proxy
+import java.util.concurrent.Executor
 
 /**
  * Foreground service that hosts a mirroring session. MediaProjection requires a running
@@ -42,7 +46,10 @@ class CaptureService : Service() {
     private var dashEnabled = false
     private var dashSwitch: SwitchableScreenSource? = null
     private var screenReceiver: BroadcastReceiver? = null
+    private var keyguardManager: KeyguardManager? = null
+    private var keyguardListener: Any? = null
     @Volatile private var dashPromotedAtMs = 0L
+    @Volatile private var dashSawLockedKeyguard = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -101,6 +108,7 @@ class CaptureService : Service() {
                     }
             }
             registerScreenReceiver()
+            registerKeyguardUnlockListener()
             switch
         } else {
             mirror
@@ -129,6 +137,8 @@ class CaptureService : Service() {
                             } else {
                                 dashSwitch?.promote(component)
                                 dashPromotedAtMs = System.currentTimeMillis()
+                                dashSawLockedKeyguard = isKeyguardLockedNow()
+                                scheduleLockStateSample(dashPromotedAtMs)
                             }
                         }
                         Intent.ACTION_SCREEN_ON -> {
@@ -136,20 +146,17 @@ class CaptureService : Service() {
                             if (promotedAt != 0L) {
                                 val ageMs = System.currentTimeMillis() - promotedAt
                                 if (ageMs >= RETURN_TO_PHONE_GRACE_MS) {
-                                    Log.d(TAG, "dash: screen on; returning to phone")
-                                    dashPromotedAtMs = 0L
-                                    dashSwitch?.demote()
+                                    returnToPhone("screen on")
                                 } else {
                                     // The helper briefly wakes the device during PROMOTE so the virtual display
                                     // can render. Ignore that synthetic wake; panel-off retries will blank display 0.
                                     Log.d(TAG, "dash: ignoring promotion wake (${ageMs}ms)")
+                                    schedulePromotionWakeSettleCheck(promotedAt, ageMs)
                                 }
                             }
                         }
                         Intent.ACTION_USER_PRESENT -> {
-                            Log.d(TAG, "dash: user present; demoting")
-                            dashPromotedAtMs = 0L
-                            dashSwitch?.demote()
+                            returnToPhone("user present", force = true)
                         }
                     }
                 }
@@ -167,6 +174,117 @@ class CaptureService : Service() {
             registerReceiver(receiver, filter)
         }
         screenReceiver = receiver
+    }
+
+    /**
+     * Some devices do not send a useful SCREEN_ON transition after we blank display 0 directly.
+     * Keyguard unlock is the higher-signal event, but the listener is API 33+ and permission-gated,
+     * so it is registered defensively and the normal broadcasts remain as fallbacks.
+     */
+    private fun registerKeyguardUnlockListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(PERMISSION_SUBSCRIBE_KEYGUARD) != PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "dash: keyguard unlock listener unavailable; permission not granted")
+            return
+        }
+        runCatching {
+            val manager = getSystemService(KeyguardManager::class.java)
+                ?: error("KeyguardManager unavailable")
+            val listenerClass = Class.forName("android.app.KeyguardManager\$KeyguardLockedStateListener")
+            val listener = Proxy.newProxyInstance(
+                listenerClass.classLoader,
+                arrayOf(listenerClass),
+            ) { _, method, args ->
+                if (method.name == "onKeyguardLockedStateChanged") {
+                    val locked = args?.firstOrNull() as? Boolean ?: return@newProxyInstance null
+                    scope.launch(Dispatchers.IO) {
+                        if (locked) {
+                            if (dashPromotedAtMs != 0L) dashSawLockedKeyguard = true
+                            Log.d(TAG, "dash: keyguard locked")
+                        } else {
+                            onKeyguardUnlocked()
+                        }
+                    }
+                }
+                null
+            }
+            val executor = Executor { runnable -> scope.launch(Dispatchers.IO) { runnable.run() } }
+            manager.javaClass
+                .getMethod("addKeyguardLockedStateListener", Executor::class.java, listenerClass)
+                .invoke(manager, executor, listener)
+            keyguardManager = manager
+            keyguardListener = listener
+            Log.d(TAG, "dash: keyguard unlock listener registered")
+        }.onFailure {
+            Log.d(TAG, "dash: keyguard unlock listener unavailable: ${it.javaClass.simpleName}")
+            keyguardManager = null
+            keyguardListener = null
+        }
+    }
+
+    private fun unregisterKeyguardUnlockListener() {
+        val manager = keyguardManager ?: return
+        val listener = keyguardListener ?: return
+        runCatching {
+            val listenerClass = Class.forName("android.app.KeyguardManager\$KeyguardLockedStateListener")
+            manager.javaClass
+                .getMethod("removeKeyguardLockedStateListener", listenerClass)
+                .invoke(manager, listener)
+        }
+        keyguardManager = null
+        keyguardListener = null
+    }
+
+    private fun onKeyguardUnlocked() {
+        val promotedAt = dashPromotedAtMs
+        if (promotedAt == 0L) return
+        val ageMs = System.currentTimeMillis() - promotedAt
+        if (dashSawLockedKeyguard || ageMs >= RETURN_TO_PHONE_GRACE_MS) {
+            returnToPhone("keyguard unlocked")
+        } else {
+            Log.d(TAG, "dash: ignoring keyguard-unlocked callback before lock settled (${ageMs}ms)")
+        }
+    }
+
+    private fun scheduleLockStateSample(promotedAt: Long) {
+        scope.launch(Dispatchers.IO) {
+            Thread.sleep(LOCK_STATE_SAMPLE_DELAY_MS)
+            if (dashPromotedAtMs == promotedAt && isKeyguardLockedNow()) {
+                dashSawLockedKeyguard = true
+                Log.d(TAG, "dash: keyguard locked after promotion")
+            }
+        }
+    }
+
+    private fun schedulePromotionWakeSettleCheck(promotedAt: Long, ageMs: Long) {
+        val delayMs = (RETURN_TO_PHONE_GRACE_MS - ageMs).coerceAtLeast(0L) + 150L
+        scope.launch(Dispatchers.IO) {
+            Thread.sleep(delayMs)
+            if (dashPromotedAtMs != promotedAt) return@launch
+            if (dashSawLockedKeyguard && isKeyguardUnlockedNow()) {
+                returnToPhone("unlock after promotion wake")
+            } else {
+                Log.d(TAG, "dash: promotion wake settled; keeping dash active")
+            }
+        }
+    }
+
+    private fun returnToPhone(reason: String, force: Boolean = false) {
+        if (!force && dashPromotedAtMs == 0L) return
+        Log.d(TAG, "dash: $reason; returning to phone")
+        dashPromotedAtMs = 0L
+        dashSawLockedKeyguard = false
+        dashSwitch?.demote()
+    }
+
+    private fun isKeyguardLockedNow(): Boolean {
+        val manager = getSystemService(KeyguardManager::class.java) ?: return false
+        return manager.isDeviceLocked || manager.isKeyguardLocked
+    }
+
+    private fun isKeyguardUnlockedNow(): Boolean {
+        val manager = getSystemService(KeyguardManager::class.java) ?: return false
+        return !manager.isDeviceLocked && !manager.isKeyguardLocked
     }
 
     /** The foreground app's launcher component to promote at lock (excludes Pillion). */
@@ -234,6 +352,7 @@ class CaptureService : Service() {
     override fun onDestroy() {
         engine?.stop()
         screenReceiver?.let { runCatching { unregisterReceiver(it) } }
+        unregisterKeyguardUnlockListener()
         // The helper is detached (orphaned to init), so it won't die on its own. Tell it to QUIT over
         // loopback — works with no network — to release the trusted display; pkill over ADB is a
         // best-effort backup (only reachable while wifi is up). Detached thread: must outlive cancel().
@@ -307,6 +426,9 @@ class CaptureService : Service() {
         private const val TAG = "Pillion"
         private const val MAX_SESSION_MS = 3L * 60 * 60 * 1000 // 3h safety cap
         private const val RETURN_TO_PHONE_GRACE_MS = 3_000L
+        private const val LOCK_STATE_SAMPLE_DELAY_MS = 250L
+        private const val PERMISSION_SUBSCRIBE_KEYGUARD =
+            "android.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE"
         const val ACTION_STOP = "app.pillion.action.STOP"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_MAX_FPS = "maxFps"
