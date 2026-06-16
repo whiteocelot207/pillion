@@ -42,6 +42,7 @@ class CaptureService : Service() {
     private var dashEnabled = false
     private var dashSwitch: SwitchableScreenSource? = null
     private var screenReceiver: BroadcastReceiver? = null
+    @Volatile private var dashPromotedAtMs = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -106,16 +107,37 @@ class CaptureService : Service() {
                 scope.launch(Dispatchers.IO) {
                     when (action) {
                         Intent.ACTION_SCREEN_OFF -> {
+                            if (dashPromotedAtMs != 0L) {
+                                Log.d(TAG, "dash: screen off while already promoted; keeping dash active")
+                                return@launch
+                            }
                             val component = foregroundComponent()
                             Log.d(TAG, "dash: screen off; foreground=$component")
                             if (component == null) {
                                 Log.w(TAG, "dash: no foreground app; usage access may be missing")
                             } else {
                                 dashSwitch?.promote(component)
+                                dashPromotedAtMs = System.currentTimeMillis()
+                            }
+                        }
+                        Intent.ACTION_SCREEN_ON -> {
+                            val promotedAt = dashPromotedAtMs
+                            if (promotedAt != 0L) {
+                                val ageMs = System.currentTimeMillis() - promotedAt
+                                if (ageMs >= RETURN_TO_PHONE_GRACE_MS) {
+                                    Log.d(TAG, "dash: screen on; returning to phone")
+                                    dashPromotedAtMs = 0L
+                                    dashSwitch?.demote()
+                                } else {
+                                    // The helper briefly wakes the device during PROMOTE so the virtual display
+                                    // can render. Ignore that synthetic wake; panel-off retries will blank display 0.
+                                    Log.d(TAG, "dash: ignoring promotion wake (${ageMs}ms)")
+                                }
                             }
                         }
                         Intent.ACTION_USER_PRESENT -> {
                             Log.d(TAG, "dash: user present; demoting")
+                            dashPromotedAtMs = 0L
                             dashSwitch?.demote()
                         }
                     }
@@ -124,6 +146,7 @@ class CaptureService : Service() {
         }
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -193,7 +216,11 @@ class CaptureService : Service() {
             .onFailure { Log.w(TAG, "dash: could not grant usage-stats appop", it) }
         // Clear any stale helper from a previous session while ADB is available.
         runCatching { adb.runShell("pkill -f app.pillion.server.DashServer") }
-        Log.d(TAG, "dash: spawning helper virtual=${dashResolution.width}x${dashResolution.height}")
+        Log.d(
+            TAG,
+            "dash: spawning helper virtual=${dashResolution.width}x${dashResolution.height} " +
+                "output=${DASH_PROTOCOL_WIDTH}x$DASH_PROTOCOL_HEIGHT",
+        )
         // Detach the helper so it survives ADB disconnect AND wifi loss — the same outcome as
         // Shizuku's native starter, achieved here with two cooperating tricks (both required,
         // verified on Pixel 9a / GrapheneOS):
@@ -210,7 +237,8 @@ class CaptureService : Service() {
         // the device awake — see DashServer.mainDisplayToken).
         val inner = "CLASSPATH=\$(pm path $packageName | grep base.apk | cut -d: -f2):\$SYSTEMSERVERCLASSPATH " +
             "app_process / app.pillion.server.DashServer " +
-            "${dashResolution.width} ${dashResolution.height} 160 $quality 480 240 " +
+            "${dashResolution.width} ${dashResolution.height} 160 $quality " +
+            "$DASH_PROTOCOL_WIDTH $DASH_PROTOCOL_HEIGHT " +
             "</dev/null >/dev/null 2>&1 &"
         val stream = adb.openShellStream("setsid sh -c '$inner'")
         // The wrapper shell exits as soon as it backgrounds the helper, so this returns quickly; the
@@ -316,6 +344,9 @@ class CaptureService : Service() {
         private const val CHANNEL_ID = "pillion"
         private const val TAG = "Pillion"
         private const val MAX_SESSION_MS = 3L * 60 * 60 * 1000 // 3h safety cap
+        private const val RETURN_TO_PHONE_GRACE_MS = 3_000L
+        private const val DASH_PROTOCOL_WIDTH = 480
+        private const val DASH_PROTOCOL_HEIGHT = 240
         const val ACTION_STOP = "app.pillion.action.STOP"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_MAX_FPS = "maxFps"

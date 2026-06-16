@@ -88,8 +88,10 @@ object DashServer {
     @Volatile private var displayId = -1
     @Volatile private var lastComponent: String? = null
     @Volatile private var keepAlive: Thread? = null
+    @Volatile private var panelOffRetry: Thread? = null
 
     private const val KEEP_ALIVE_MS = 3000L // poke the dash display group well under its ~10s idle timeout
+    private val PANEL_OFF_RETRY_DELAYS_MS = longArrayOf(700L, 1500L)
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -236,6 +238,7 @@ object DashServer {
         capturing = true
         startHeartbeat()          // keep the device interactive so the dash group renders
         setMainDisplayPower(false) // turn the phone's own panel off (it stays awake → dash keeps rendering)
+        startPanelOffRetries()
         Log.i(TAG, "promoted $component to display $displayId")
     }
 
@@ -254,7 +257,7 @@ object DashServer {
             Log.w(TAG, "keep-alive: userActivity unavailable — dash will black out ~10s after lock")
             return
         }
-        wakeDevice() // power-press may have dozed the device; wake it so the dash group can render
+        wakeDisplay(displayId) // power-press may have dozed this display group; wake it so it can render
         keepAlive = Thread {
             Log.i(TAG, "keep-alive: started for display $displayId")
             while (capturing && displayId >= 0) {
@@ -271,26 +274,65 @@ object DashServer {
         keepAlive = null
     }
 
-    /** Wake the device from sleep/doze (the user just pressed POWER) so the dash display can render.
-     *  userActivity only resets the idle timer — it can't wake a dozing device — so we need wakeUp(). */
-    private fun wakeDevice() {
+    /**
+     * On Android 16, wakeUpWithDisplayId() may still be finishing its normal display-on transition
+     * when the first panel-off request runs, so PowerManager can turn display 0 back on a few hundred
+     * milliseconds later. Retry after the wake settles; the virtual display keeps rendering.
+     */
+    private fun startPanelOffRetries() {
+        panelOffRetry?.interrupt()
+        val retry = Thread {
+            var elapsed = 0L
+            for (delay in PANEL_OFF_RETRY_DELAYS_MS) {
+                try {
+                    val sleepMs = delay - elapsed
+                    if (sleepMs > 0) Thread.sleep(sleepMs)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                elapsed = delay
+                if (!capturing) break
+                Log.i(TAG, "panel: retrying main display OFF after ${delay}ms")
+                setMainDisplayPower(false)
+            }
+            if (panelOffRetry === Thread.currentThread()) panelOffRetry = null
+        }.apply { isDaemon = true }
+        panelOffRetry = retry
+        retry.start()
+    }
+
+    private fun stopPanelOffRetries() {
+        panelOffRetry?.interrupt()
+        panelOffRetry = null
+    }
+
+    /** Wake the dash display group from sleep/doze. userActivity only resets the idle timer; it
+     *  cannot wake a sleeping group, so Android 14+ needs wakeUpWithDisplayId() here. */
+    private fun wakeDisplay(displayId: Int) {
         val pm = powerService ?: return
-        val m = pm.javaClass.methods.firstOrNull { it.name == "wakeUp" } ?: run {
+        val m = pm.javaClass.methods.firstOrNull {
+            it.name == "wakeUpWithDisplayId" && it.parameterTypes.any { t -> t == Int::class.javaPrimitiveType }
+        } ?: pm.javaClass.methods.firstOrNull { it.name == "wakeUp" } ?: run {
             Log.w(TAG, "wake: no wakeUp method"); return
         }
         runCatching {
-            val now = android.os.SystemClock.uptimeMillis()
-            val args = m.parameterTypes.mapIndexed { i, t ->
-                when {
-                    t == Long::class.javaPrimitiveType -> now
-                    t == Int::class.javaPrimitiveType -> 0           // wake reason: UNKNOWN/APPLICATION
-                    t == String::class.java -> "pillion-dash"        // details / opPackageName
-                    else -> null
-                }
-            }.toTypedArray()
-            m.invoke(pm, *args)
-            Log.i(TAG, "wake: requested device wake")
+            m.invoke(pm, *wakeArgs(m, displayId))
+            Log.i(TAG, "wake: requested ${m.name} for display $displayId")
         }.onFailure { Log.w(TAG, "wake: wakeUp failed: ${reason(it)}") }
+    }
+
+    private fun wakeArgs(method: java.lang.reflect.Method, displayId: Int): Array<Any?> {
+        val strings = mutableListOf("pillion-dash", SHELL_PACKAGE)
+        val last = method.parameterTypes.lastIndex
+        return method.parameterTypes.mapIndexed { i, t ->
+            when {
+                t == Long::class.javaPrimitiveType -> android.os.SystemClock.uptimeMillis()
+                t == Int::class.javaPrimitiveType ->
+                    if (method.name == "wakeUpWithDisplayId" && i == last) displayId else 0
+                t == String::class.java -> strings.removeFirstOrNull() ?: SHELL_PACKAGE
+                else -> null
+            }
+        }.toTypedArray()
     }
 
     /** IPowerManager binder, for the per-display userActivity heartbeat (shell uid holds DEVICE_POWER). */
@@ -314,6 +356,8 @@ object DashServer {
 
     private const val POWER_MODE_OFF = 0
     private const val POWER_MODE_NORMAL = 2
+    private const val DISPLAY_STATE_OFF = 1
+    private const val DISPLAY_STATE_ON = 2
 
     /**
      * Blank (or restore) the PHONE's main panel without sleeping the device — scrcpy's `--turn-screen-off`.
@@ -323,10 +367,9 @@ object DashServer {
      * awake, and the dash keeps rendering. Restored on demote/shutdown.
      */
     private fun setMainDisplayPower(on: Boolean) {
-        // Try the real panel-off APIs only. (Brightness-0 dimming was removed — it doesn't truly turn
-        // the screen off and isn't wanted.) On phones where these work the panel goes off; on stock
-        // AOSP/Pixel they're a no-op (token needs libandroid_servers natives that won't load in
-        // app_process; requestDisplayPower is a no-op) — there's no real screen-off there.
+        // Try the real panel-off APIs only. Brightness-0 dimming was removed because it doesn't truly
+        // turn the screen off. On some builds these hidden APIs are unavailable or rejected; when that
+        // happens there is no app-only way to force a real panel-off state.
         // Primary: SurfaceControl.setDisplayPowerMode(token, mode) — actually blanks the panel at the
         // SurfaceFlinger level while the system stays awake (scrcpy's --turn-screen-off).
         val token = mainDisplayToken()
@@ -346,9 +389,21 @@ object DashServer {
         }
         if (dm != null && req != null) {
             runCatching {
-                val arg = if (req.parameterTypes[1] == Boolean::class.javaPrimitiveType) on else if (on) 2 else 0
-                req.invoke(dm, 0, arg)
-            }.onSuccess { Log.i(TAG, "panel: main display ${if (on) "ON" else "OFF"} (requestDisplayPower)") }
+                val arg = if (req.parameterTypes[1] == Boolean::class.javaPrimitiveType) {
+                    on
+                } else if (on) {
+                    DISPLAY_STATE_ON
+                } else {
+                    DISPLAY_STATE_OFF
+                }
+                req.invoke(dm, 0, arg) as? Boolean
+            }.onSuccess { accepted ->
+                if (accepted == false) {
+                    Log.w(TAG, "panel: requestDisplayPower returned false for ${if (on) "ON" else "OFF"}")
+                } else {
+                    Log.i(TAG, "panel: main display ${if (on) "ON" else "OFF"} (requestDisplayPower)")
+                }
+            }
                 .onFailure { Log.w(TAG, "panel: requestDisplayPower: ${reason(it)}") }
         } else {
             Log.w(TAG, "panel: no way to set main display power")
@@ -421,7 +476,9 @@ object DashServer {
     /** Move the app back to the phone and stop encoding (phone unlocked). */
     private fun demoteApp() {
         capturing = false
+        stopPanelOffRetries()
         stopHeartbeat()
+        wakeDisplay(0) // requestDisplayPower(ON) cannot restore a still-dozing power group by itself
         setMainDisplayPower(true) // restore the phone's panel
         latestJpeg = null
         lastComponent?.let {
