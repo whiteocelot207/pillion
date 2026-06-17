@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/iOS-planned-lightgrey" alt="iOS planned">
   <img src="https://img.shields.io/badge/license-PolyForm%20NC-blue" alt="PolyForm Noncommercial">
   <a href="https://discord.gg/mxNV97QUnB"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Join the Discord"></a>
+  <a href="https://buymeacoffee.com/alexandrevega"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"></a>
 </p>
 
 > **🚧 Alpha.** Android-only for now and under active development — it works on my MT-07 (2025) but is
