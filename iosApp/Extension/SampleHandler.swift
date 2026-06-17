@@ -32,8 +32,14 @@ class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         running = true
         BroadcastSignal.post(BroadcastSignal.started)
-        let hasBike = EAAccessoryManager.shared().connectedAccessories
-            .contains { $0.protocolStrings.contains(BroadcastConfig.dashProtocol) }
+        // Enumerate EVERY connected MFi accessory up front so a bike test is diagnosable even when the
+        // protocol string doesn't match (otherwise we silently fall back to TCP and learn nothing about
+        // what the CCU actually advertises). iOS only exposes MFi accessories here — if the bike isn't
+        // listed at all, it isn't pairing as an External Accessory and the EA path can't work.
+        let accs = EAAccessoryManager.shared().connectedAccessories
+        NSLog("PillionExt: %d connected accessory(ies)", accs.count)
+        for a in accs { NSLog("PillionExt:  • %@ — protocols=%@", a.name, a.protocolStrings) }
+        let hasBike = accs.contains { $0.protocolStrings.contains(BroadcastConfig.dashProtocol) }
         let c: DashConn = hasBike ? EAConn()
                                   : TCPConn(host: BroadcastConfig.emulatorHost, port: BroadcastConfig.emulatorPort)
         c.logger = { s in NSLog("PillionExt: %@", s) }
@@ -60,9 +66,15 @@ class SampleHandler: RPBroadcastSampleHandler {
         NSLog("PillionExt: auth + setup done")
     }
 
+    // Cap how long we block waiting for a frame's image ack. The dash acks each IMAGE_FRAME 1:1, so we
+    // stay in lockstep (matches Android's MirrorEngine, which gets ~12 fps this way), but a slow/dropped
+    // ack must not freeze the stream — the old 2 s deadline turned a single missed ack into a 2 s stall.
+    private let ackBudget: TimeInterval = 0.5
+
     private func pushLoop() {
-        var frames = 0; var t0 = Date()
+        var frames = 0, acks = 0; var t0 = Date()
         var lastSend = Date(timeIntervalSince1970: 0)
+        var sendTotal = 0.0, ackTotal = 0.0
         while running {
             // Pace to the target fps and always send the freshest frame. Without this we send as fast
             // as the link ACKs (~77 fps on WiFi), flooding the dash/viewer so latency builds up.
@@ -72,11 +84,23 @@ class SampleHandler: RPBroadcastSampleHandler {
             guard let jpg = j else { usleep(15000); continue }
             lastSend = Date()
             var pl: [UInt8] = [3, UInt8(seq & 0xff), UInt8((seq >> 8) & 0xff)]; pl.append(contentsOf: jpg); seq += 1
-            conn.write(NaviLite.frame(6, 0, 1, pl))
-            let deadline = Date().addingTimeInterval(2)
-            while Date() < deadline { if (try? conn.readFrame(timeout: 2))?.svc == 80 { break } }
+            let s0 = Date(); conn.write(NaviLite.frame(6, 0, 1, pl)); sendTotal += Date().timeIntervalSince(s0)
+            // Wait for the image ack (svc 80), but cap the total wait at ackBudget so a dropped ack can't
+            // freeze the dash. Read with the *remaining* budget so interleaved frames don't extend it.
+            let a0 = Date(); let deadline = a0.addingTimeInterval(ackBudget)
+            while running {
+                let remain = deadline.timeIntervalSinceNow
+                if remain <= 0 { break }
+                if (try? conn.readFrame(timeout: remain))?.svc == 80 { acks += 1; break }
+            }
+            ackTotal += Date().timeIntervalSince(a0)
             frames += 1; let dt = Date().timeIntervalSince(t0)
-            if dt >= 1 { NSLog("PillionExt: FPS %.1f  %dKB", Double(frames) / dt, jpg.count / 1024); frames = 0; t0 = Date() }
+            if dt >= 1 {
+                NSLog("PillionExt: FPS %.1f  %dKB  send %.0fms ack %.0fms  acks %d/%d",
+                      Double(frames) / dt, jpg.count / 1024,
+                      sendTotal / Double(frames) * 1000, ackTotal / Double(frames) * 1000, acks, frames)
+                frames = 0; acks = 0; sendTotal = 0; ackTotal = 0; t0 = Date()
+            }
         }
     }
 
