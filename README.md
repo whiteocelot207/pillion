@@ -49,23 +49,11 @@ local laws about screens/displays while riding.
 ## Supported bikes
 
 Any Yamaha that uses the **Garmin "Communication Control Unit" (CCU)** / works with the Garmin
-StreetCross app. Confirmed working by the community so far:
+StreetCross app — confirmed so far on the MT-07, MT-09, R9, and XSR900, and very likely on other
+models with the same CCU platform.
 
-| Model | Phone / OS | Streams? | fps | Reported by |
-|-------|------------|:-------:|-----|-------------|
-| **MT-07 (2025)** | — | ✅ | ~14–15 | maintainer |
-| **R9 (2026)** | Galaxy S25 Ultra / Android 16 | ✅ | ~15, smooth | @rf7719. |
-| **MT-09 (2025)** | Galaxy S23 / Android 16 | ✅ | ~11–12 | @mobiusixi6246 |
-| **MT-09 (2024)** | Galaxy A52 / Android 14 | ✅ | ~12 | @mxtt |
-| **MT-09 SP (2026)** | Android | ✅ | — | @raccoon_builds |
-| **XSR900 (2025)** | Pixel 9 Pro / Android 16 | ✅ | ~11–12 | @Turbobrallan |
-
-Very likely also works on other models with the same CCU platform (e.g. XSR900 GP, Tracer 9 GT+,
-Niken GT, TMAX, XMAX), since the protocol is shared — **more reports welcome** (open an issue or
-post in the Discord with your model + result).
-
-The auth is universal — there is **no per-bike key or pairing secret** to extract (see
-[docs/PROTOCOL.md](docs/PROTOCOL.md)).
+See **[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)** for the full list of confirmed bikes, fps
+reports, and how to add yours. **More reports welcome!**
 
 ## Install (Android)
 
