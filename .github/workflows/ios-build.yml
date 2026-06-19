@@ -1,0 +1,53 @@
+name: iOS Build IPA (Free)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Node (if needed)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          cd iosApp
+          xcodegen generate
+
+      - name: Build iOS (no signing)
+        run: |
+          cd iosApp
+          xcodebuild \
+            -project iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Archive output
+        run: |
+          mkdir -p output
+          cp -R ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release-iphoneos/*.app output/ || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: output
